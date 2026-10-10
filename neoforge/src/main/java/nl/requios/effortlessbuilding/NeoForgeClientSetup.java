@@ -27,7 +27,6 @@ import nl.requios.effortlessbuilding.screen.RandomizerTooltipComponent;
 import nl.requios.effortlessbuilding.item.RandomizerToolItem;
 import nl.requios.effortlessbuilding.item.RandomizerTooltipData;
 import nl.requios.effortlessbuilding.menu.ModMenus;
-import org.lwjgl.glfw.GLFW;
 
 public class NeoForgeClientSetup {
 
@@ -69,14 +68,14 @@ public class NeoForgeClientSetup {
             // Undo/redo keybindings — require Ctrl held
             Minecraft mc = Minecraft.getInstance();
             while (KeyBindings.undo.consumeClick()) {
-                if (InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_LEFT_CONTROL)
-                        || InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_RIGHT_CONTROL)) {
+                if (InputConstants.isKeyDown(InputConstants.KEY_LCONTROL)
+                        || InputConstants.isKeyDown(InputConstants.KEY_RCONTROL)) {
                     PacketHandler.sendToServer(new UndoPacket());
                 }
             }
             while (KeyBindings.redo.consumeClick()) {
-                if (InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_LEFT_CONTROL)
-                        || InputConstants.isKeyDown(mc.getWindow(), GLFW.GLFW_KEY_RIGHT_CONTROL)) {
+                if (InputConstants.isKeyDown(InputConstants.KEY_LCONTROL)
+                        || InputConstants.isKeyDown(InputConstants.KEY_RCONTROL)) {
                     PacketHandler.sendToServer(new RedoPacket());
                 }
             }

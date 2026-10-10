@@ -23,8 +23,6 @@ dependencies {
 
     // Applied Energistics 2 — optional integration for pulling building materials from ME network.
     // This is compileOnly so the JAR does not depend on AE2 at runtime.
-    // Adjust the version to match the AE2 release for your target Minecraft version.
-    // Available on Maven Central: https://central.sonatype.com/artifact/org.appliedenergistics/appliedenergistics2
     compileOnly("org.appliedenergistics:appliedenergistics2:${ae2_version}")
 }
 

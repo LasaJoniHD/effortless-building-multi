@@ -450,6 +450,12 @@ public class BlockPreviewRenderer {
         }
 
         @Override
+        public VertexConsumer setUv3(float u, float v) {
+            delegate.setUv3(u, v);
+            return this;
+        }
+
+        @Override
         public VertexConsumer setNormal(float nx, float ny, float nz) {
             delegate.setNormal(nx, ny, nz);
             return this;
@@ -490,6 +496,7 @@ public class BlockPreviewRenderer {
         @Override public VertexConsumer setUv(float u, float v) { delegate.setUv(u, v); return this; }
         @Override public VertexConsumer setUv1(int u, int v) { delegate.setUv1(u, v); return this; }
         @Override public VertexConsumer setUv2(int u, int v) { delegate.setUv2(u, v); return this; }
+        @Override public VertexConsumer setUv3(float u, float v) { delegate.setUv3(u, v); return this; }
         @Override public VertexConsumer setNormal(float nx, float ny, float nz) { delegate.setNormal(nx, ny, nz); return this; }
         @Override public VertexConsumer setLineWidth(float width) { delegate.setLineWidth(width); return this; }
     }

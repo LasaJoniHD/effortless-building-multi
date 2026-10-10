@@ -175,12 +175,28 @@ public class AE2Integration {
 
         private final appeng.items.tools.powered.WirelessTerminalItem terminalMarker;
 
-        Internal() {
+        // AEItemKey.of is overloaded with a NeoForge ItemResource variant, which common can't see at
+        // compile time, so the ItemLike/ItemStack overloads are resolved reflectively instead.
+        private final Method keyOfItemLike;
+        private final Method keyOfStack;
+
+        Internal() throws NoSuchMethodException {
             terminalMarker = null;
+            keyOfItemLike = appeng.api.stacks.AEItemKey.class.getMethod("of", net.minecraft.world.level.ItemLike.class);
+            keyOfStack = appeng.api.stacks.AEItemKey.class.getMethod("of", ItemStack.class);
             tryInitCurios();
         }
 
         // ---- helpers --------------------------------------------------------
+
+        @Nullable
+        private appeng.api.stacks.AEItemKey keyOf(Method of, Object arg) {
+            try {
+                return (appeng.api.stacks.AEItemKey) of.invoke(null, arg);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("[AE2] Failed to create AEItemKey", e);
+            }
+        }
 
         /** Scans the player's inventory for a linked, in-range wireless terminal. */
         @Nullable
@@ -388,7 +404,7 @@ public class AE2Integration {
             if (grid == null) return 0;
 
             appeng.api.storage.MEStorage storage = getStorage(grid);
-            appeng.api.stacks.AEItemKey key = appeng.api.stacks.AEItemKey.of(item);
+            appeng.api.stacks.AEItemKey key = keyOf(keyOfItemLike, item);
 
             long available = storage.extract(key, Long.MAX_VALUE,
                     appeng.api.config.Actionable.SIMULATE, playerSource(player));
@@ -402,7 +418,7 @@ public class AE2Integration {
             if (grid == null) return 0;
 
             appeng.api.storage.MEStorage storage = getStorage(grid);
-            appeng.api.stacks.AEItemKey key = appeng.api.stacks.AEItemKey.of(item);
+            appeng.api.stacks.AEItemKey key = keyOf(keyOfItemLike, item);
 
             long extracted = storage.extract(key, count,
                     appeng.api.config.Actionable.MODULATE, playerSource(player));
@@ -424,7 +440,7 @@ public class AE2Integration {
             if (grid == null) return 0;
 
             appeng.api.storage.MEStorage storage = getStorage(grid);
-            appeng.api.stacks.AEItemKey key = appeng.api.stacks.AEItemKey.of(held);
+            appeng.api.stacks.AEItemKey key = keyOf(keyOfStack, held);
 
             // Extract from network
             long extracted = storage.extract(key, needed,
@@ -437,7 +453,7 @@ public class AE2Integration {
                 int over = held.getCount() - maxStack;
                 if (over > 0) {
                     held.shrink(over);
-                    player.drop(key.toStack(over), false);
+                    player.drop(key.toStack(over), false, net.minecraft.util.Prediction.SERVER_ONLY);
                 }
             }
 

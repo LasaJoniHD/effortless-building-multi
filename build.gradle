@@ -1,10 +1,10 @@
 plugins {
-    // see https://fabricmc.net/develop/ for new versions
-    id 'net.fabricmc.fabric-loom' version '1.16.3' apply false
+    // see https://maven.fabricmc.net/fabric-loom/fabric-loom.gradle.plugin/maven-metadata.xml for new versions
+    id 'net.fabricmc.fabric-loom' version '1.18.1' apply false
     // see https://projects.neoforged.net/neoforged/moddevgradle for new versions
-    id 'net.neoforged.moddev' version '2.0.141' apply false
+    id 'net.neoforged.moddev' version '2.0.147' apply false
     // Forgix merges Fabric + NeoForge JARs into one universal JAR
-    id 'io.github.pacifistmc.forgix' version '2.0.0-SNAPSHOT.5.1'
+    id 'io.github.pacifistmc.forgix' version '2.0.0'
 }
 
 forgix {
