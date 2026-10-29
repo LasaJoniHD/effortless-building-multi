@@ -8,6 +8,10 @@ Many mods make it easier to break blocks, but not many focus on placing them. Ev
 
 [CurseForge](https://www.curseforge.com/minecraft/mc-mods/effortless-building) | [Modrinth](https://modrinth.com/mod/effortless-building)
 
+Fabric 26.3 servers can support modded and vanilla players together. See the
+[server backend guide](fabric-server/README.md) for installation, compatibility,
+verification commands, and limitations. Bukkit/Paper support is a future placeholder.
+
 ## Build Modes
 <iframe width="638" height="358" src="https://www.youtube.com/embed/LmYSV4z1UbE?si=YOx8QcqLMOKWQXNl" title="YouTube video player" frameborder="0" allow="clipboard-write; encrypted-media; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 

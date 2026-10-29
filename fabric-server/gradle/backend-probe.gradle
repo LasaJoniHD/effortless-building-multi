@@ -1,0 +1,51 @@
+// Headless protocol probe uses Mojang's client codecs without launching Fabric or any client mods.
+sourceSets {
+    backendProbe {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
+}
+tasks.register('backendProbe', JavaExec) {
+    classpath = sourceSets.backendProbe.runtimeClasspath
+    mainClass = 'nl.requios.effortlessbuilding.test.BackendProtocolProbe'
+    workingDir = layout.buildDirectory.dir('backend-test/probe').get().asFile
+    doFirst { workingDir.mkdirs() }
+    args providers.gradleProperty('probeMode').getOrElse('vanilla')
+}
+
+tasks.register('prepareBackendTestServer') {
+    def testDirectory = layout.buildDirectory.dir('backend-test/server')
+    doLast {
+        def directory = testDirectory.get().asFile
+        directory.mkdirs()
+        def eula = new File(directory, 'eula.txt')
+        if (providers.gradleProperty('acceptMinecraftEula').getOrElse('false') == 'true') {
+            eula.text = 'eula=true\n'
+        }
+        if (!eula.exists() || !eula.text.contains('eula=true')) {
+            throw new GradleException('Accept the Minecraft EULA for this isolated test server using -PacceptMinecraftEula=true.')
+        }
+        new File(directory, 'server.properties').text = '''online-mode=false
+server-ip=127.0.0.1
+server-port=25576
+white-list=false
+level-name=backend-test
+level-type=minecraft:flat
+generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains"}
+spawn-protection=0
+view-distance=2
+simulation-distance=2
+max-players=4
+difficulty=peaceful
+pause-when-empty-seconds=0
+enable-rcon=true
+rcon.port=25577
+rcon.password=backend-probe-local-only
+broadcast-rcon-to-ops=false
+'''
+    }
+}
+tasks.matching { it.name == 'runBackendTestServer' }.configureEach {
+    dependsOn tasks.named('prepareBackendTestServer')
+}
+tasks.named('check') { dependsOn tasks.named('compileBackendProbeJava') }

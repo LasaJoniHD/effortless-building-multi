@@ -1,0 +1,3 @@
+plugins { id 'base' }
+
+description = 'Placeholder for a future Bukkit/Paper server backend; no plugin is built.'

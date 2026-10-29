@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "effortlessbuilding_server",
+  "version": "${version}",
+  "name": "Effortless Building Server",
+  "description": "Optional dedicated-server backend for unchanged Effortless Building clients and vanilla players.",
+  "authors": ["${mod_author}"],
+  "license": "${license}",
+  "environment": "server",
+  "entrypoints": {"main": ["nl.requios.effortlessbuilding.server.FabricServerMod"]},
+  "mixins": ["effortlessbuilding.server.mixins.json"],
+  "accessWidener": "effortlessbuilding.accesswidener",
+  "depends": {
+    "fabricloader": ">=${fabric_loader_version}",
+    "fabric-api": ">=${fabric_version}",
+    "polymer-core": ">=0.18.5",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=${java_version}"
+  },
+  "breaks": {"effortlessbuilding": "*"}
+}

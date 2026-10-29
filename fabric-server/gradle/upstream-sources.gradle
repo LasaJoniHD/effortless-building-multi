@@ -1,0 +1,78 @@
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+
+// The original common/ tree is an input only. All adaptations are generated here.
+def upstreamJava = project(':common').file('src/main/java')
+def patchFile = file('patches/common-server.patch')
+def fingerprintFile = file('patches/upstream-sha256.json')
+def generatedJava = layout.buildDirectory.dir('generated/upstream-java')
+
+tasks.register('verifyUpstreamCompatibility') {
+    inputs.dir(upstreamJava)
+    inputs.property('minecraftVersion', minecraft_version)
+    inputs.files(patchFile, fingerprintFile)
+    doLast {
+        if (minecraft_version != '26.3') throw new GradleException('The server backend targets Minecraft 26.3. Review its dependencies and patches before updating it.')
+        def fingerprints = new JsonSlurper().parse(fingerprintFile)
+        fingerprints.each { name, expected ->
+            def source = new File(upstreamJava, name)
+            if (!source.isFile()) throw new GradleException("Upstream class removed: ${name}; review fabric-server/patches.")
+            def normalized = source.getText('UTF-8').replace('\r\n', '\n')
+            def actual = MessageDigest.getInstance('SHA-256').digest(normalized.getBytes('UTF-8')).encodeHex().toString()
+            if (actual != expected) {
+                throw new GradleException("Upstream class changed: ${name}. Review the server adaptation and update fabric-server/patches/upstream-sha256.json after testing.")
+            }
+        }
+    }
+}
+
+tasks.register('prepareSharedServerSources', Sync) {
+    dependsOn tasks.named('verifyUpstreamCompatibility')
+    from(upstreamJava)
+    into(generatedJava)
+    // Do not package upstream UI, rendering, input hooks or the client controller.
+    exclude '**/screen/**', '**/render/**', '**/buildpipeline/BuildPipelineClient.java'
+    exclude '**/utilities/KeyBindings.java'
+    exclude '**/mixin/MixinMinecraft.java', '**/mixin/MixinGameRenderer.java'
+    exclude '**/mixin/KeyMappingAccessor.java', '**/mixin/GuiGraphicsAccessor.java'
+    inputs.files(patchFile, fingerprintFile)
+    doLast {
+        def root = generatedJava.get().asFile.toPath().toAbsolutePath().normalize()
+        def patch = patchFile.readLines('UTF-8')
+        int index = 0
+        while (index < patch.size()) {
+            if (!patch[index].startsWith('+++ b/common/src/main/java/')) { index++; continue }
+            def name = patch[index++].substring('+++ b/common/src/main/java/'.length())
+            def target = root.resolve(name).normalize()
+            if (!target.startsWith(root)) throw new GradleException("Invalid server patch path: ${name}")
+            def original = target.toFile().readLines('UTF-8')
+            def result = []
+            int cursor = 0
+            while (index < patch.size() && !patch[index].startsWith('diff --git ')) {
+                def header = patch[index] =~ /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*/
+                if (!header.matches()) { index++; continue }
+                int start = Integer.parseInt(header[0][1]) - 1
+                while (cursor < start) result.add(original[cursor++])
+                index++
+                while (index < patch.size() && !patch[index].startsWith('@@ ') && !patch[index].startsWith('diff --git ')) {
+                    def line = patch[index++]
+                    if (line.startsWith('\\')) continue
+                    if (line.startsWith('+')) { result.add(line.substring(1)); continue }
+                    if (!(line.startsWith(' ') || line.startsWith('-'))) break
+                    if (cursor >= original.size() || original[cursor] != line.substring(1)) {
+                        throw new GradleException("Server patch context mismatch: ${name}:${cursor + 1}")
+                    }
+                    if (line.startsWith(' ')) result.add(original[cursor])
+                    cursor++
+                }
+            }
+            while (cursor < original.size()) result.add(original[cursor++])
+            target.toFile().setText(result.join('\n') + '\n', 'UTF-8')
+        }
+    }
+}
+
+sourceSets.main.java.srcDir(generatedJava)
+tasks.named('compileJava') { dependsOn tasks.named('prepareSharedServerSources') }
+tasks.named('sourcesJar') { dependsOn tasks.named('prepareSharedServerSources') }
+tasks.named('javadoc') { dependsOn tasks.named('prepareSharedServerSources') }

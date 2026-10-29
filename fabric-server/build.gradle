@@ -1,0 +1,53 @@
+plugins {
+    id 'multiloader-common'
+    id 'net.fabricmc.fabric-loom'
+}
+
+// Backend dependencies are independent of the upstream client project's defaults.
+ext.fabric_version = '0.162.0+26.3'
+
+repositories {
+    maven { url = 'https://maven.nucleoid.xyz' }
+}
+
+dependencies {
+    minecraft("com.mojang:minecraft:${minecraft_version}")
+    implementation("net.fabricmc:fabric-loader:${fabric_loader_version}")
+    implementation("net.fabricmc.fabric-api:fabric-api:${fabric_version}")
+    implementation include('eu.pb4:polymer-core:0.18.5+26.3')
+    include('eu.pb4:polymer-common:0.18.5+26.3')
+    compileOnly("org.appliedenergistics:appliedenergistics2:${ae2_version}")
+}
+
+apply from: 'gradle/upstream-sources.gradle'
+
+sourceSets.main.resources {
+    srcDir project(':common').file('src/main/resources')
+    exclude 'effortlessbuilding.mixins.json', 'META-INF/accesstransformer.cfg', 'assets/**'
+}
+
+loom {
+    accessWidenerPath.set(project(':common').file("src/main/resources/${mod_id}.accesswidener"))
+    runs {
+        server {
+            server()
+            setConfigName('Fabric Server Backend')
+            runDir('runs/server')
+            programArgs '--nogui'
+        }
+        backendTestServer {
+            server()
+            setConfigName('Fabric Backend Integration Server')
+            runDir('build/backend-test/server')
+            programArgs '--nogui'
+        }
+    }
+}
+
+apply from: 'gradle/backend-probe.gradle'
+
+// Publish backend API documentation; upstream client-only Javadoc links are not server APIs.
+tasks.named('javadoc') {
+    setSource(fileTree('src/main/java'))
+    classpath += sourceSets.main.output
+}

@@ -1,0 +1,2455 @@
+diff --git a/README.md b/README.md
+index e6ee2ba..e7e5cd9 100644
+--- a/README.md
++++ b/README.md
+@@ -8,6 +8,10 @@ Many mods make it easier to break blocks, but not many focus on placing them. Ev
+ 
+ [CurseForge](https://www.curseforge.com/minecraft/mc-mods/effortless-building) | [Modrinth](https://modrinth.com/mod/effortless-building)
+ 
++Fabric 26.3 servers can support modded and vanilla players together. See the
++[server backend guide](docs/fabric-server-backend.md) for installation, compatibility,
++verification commands, and limitations. Bukkit/Paper support is a future placeholder.
++
+ ## Build Modes
+ <iframe width="638" height="358" src="https://www.youtube.com/embed/LmYSV4z1UbE?si=YOx8QcqLMOKWQXNl" title="YouTube video player" frameborder="0" allow="clipboard-write; encrypted-media; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java b/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
+index a8dd653..a5f12e6 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
+@@ -1,7 +1,5 @@
+ package nl.requios.effortlessbuilding;
+ 
+-import net.minecraft.client.gui.GuiGraphicsExtractor;
+-import net.minecraft.client.renderer.RenderPipelines;
+ import net.minecraft.resources.Identifier;
+ 
+ public class AllIcons {
+@@ -94,8 +92,6 @@ public class AllIcons {
+         // No-op in 1.21.11 — texture binding is handled by the render pipeline
+     }
+ 
+-    public void render(GuiGraphicsExtractor graphics, int x, int y) {
+-        graphics.blit(RenderPipelines.GUI_TEXTURED, ICON_ATLAS, x, y, (float) iconX, (float) iconY, 16, 16, 256, 256);
+-    }
+-
++    public int getIconX() { return iconX; }
++    public int getIconY() { return iconY; }
+ }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
+index e5667bc..674f11b 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
+@@ -1,6 +1,5 @@
+ package nl.requios.effortlessbuilding.buildmode;
+ 
+-import net.minecraft.client.Minecraft;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.world.item.ItemStack;
+ import net.minecraft.world.level.Level;
+@@ -41,10 +40,9 @@ public class BuildSettings {
+     }
+ 
+     /**
+-     * Returns the effective replace mode. Falls back to ONLY_AIR if there is no local player.
++     * Returns the selected replace mode without accessing client-only Minecraft classes.
+      */
+     public ReplaceMode getReplaceMode() {
+-        if (!canReplace()) return ReplaceMode.ONLY_AIR;
+         return replaceMode;
+     }
+ 
+@@ -106,12 +104,4 @@ public class BuildSettings {
+     // Private helpers
+     // -------------------------------------------------------------------------
+ 
+-    private boolean canReplace() {
+-        Minecraft mc = Minecraft.getInstance();
+-        return mc.player != null;
+-    }
+ }
+-
+-
+-
+-
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
+index f11c869..37e63a8 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
+@@ -9,6 +9,9 @@ import nl.requios.effortlessbuilding.network.RedoPacket;
+ 
+ public class ModeOptions {
+ 
++    private record Calculation(ActionEnum fill, ActionEnum cubeFill, ActionEnum raisedEdge, ActionEnum circleStart) {}
++    private static final ThreadLocal<Calculation> CALCULATION = new ThreadLocal<>();
++
+ 	private static ActionEnum buildSpeed = ActionEnum.NORMAL_SPEED;
+ 	private static ActionEnum fill = ActionEnum.FULL;
+ 	private static ActionEnum cubeFill = ActionEnum.CUBE_FULL;
+@@ -40,14 +43,17 @@ public class ModeOptions {
+ 	}
+ 
+ 	public static ActionEnum getFill() {
++		if (CALCULATION.get() != null) return CALCULATION.get().fill();
+ 		return fill;
+ 	}
+ 
+ 	public static ActionEnum getCubeFill() {
++		if (CALCULATION.get() != null) return CALCULATION.get().cubeFill();
+ 		return cubeFill;
+ 	}
+ 
+ 	public static ActionEnum getRaisedEdge() {
++		if (CALCULATION.get() != null) return CALCULATION.get().raisedEdge();
+ 		return raisedEdge;
+ 	}
+ 
+@@ -56,17 +62,17 @@ public class ModeOptions {
+ 	}
+ 
+ 	public static ActionEnum getCircleStart() {
++		if (CALCULATION.get() != null) return CALCULATION.get().circleStart();
+ 		return circleStart;
+ 	}
+ 
+ 	// Called server-side before recalculating block positions from a packet.
+ 	public static void applyForCalculation(ActionEnum fill, ActionEnum cubeFill, ActionEnum raisedEdge, ActionEnum circleStart) {
+-		ModeOptions.fill = fill;
+-		ModeOptions.cubeFill = cubeFill;
+-		ModeOptions.raisedEdge = raisedEdge;
+-		ModeOptions.circleStart = circleStart;
++		CALCULATION.set(new Calculation(fill, cubeFill, raisedEdge, circleStart));
+ 	}
+ 
++	public static void clearCalculation() { CALCULATION.remove(); }
++
+ 	public static void performAction(Player player, ActionEnum action) {
+ 		if (action == null) return;
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
+index d04086e..6ea5b63 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
+@@ -12,7 +12,7 @@ import java.util.List;
+ public class Circle extends TwoClicksBuildMode {
+ 
+ 	public static List<BlockPos> getCircleBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		float centerX = x1;
+ 		float centerZ = z1;
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
+index 82cb9b1..4d004ee 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
+@@ -11,7 +11,7 @@ import java.util.List;
+ public class Cube extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getFloorBlocksUsingCubeFill(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (ModeOptions.getCubeFill() == ModeOptions.ActionEnum.CUBE_SKELETON)
+ 			Floor.addHollowFloorBlocks(list, x1, x2, y1, z1, z2);
+@@ -22,7 +22,7 @@ public class Cube extends ThreeClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getCubeBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		switch (ModeOptions.getCubeFill()) {
+ 			case CUBE_FULL:
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
+index 8547777..671cd83 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
+@@ -10,7 +10,7 @@ import java.util.List;
+ public class Cylinder extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getCylinderBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		//Get circle blocks (using CIRCLE_START and FILL options built-in)
+ 		List<BlockPos> circleBlocks = Circle.getCircleBlocks(player, x1, y1, z1, x2, y2, z2);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
+index c35b523..d0d0186 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
+@@ -12,7 +12,7 @@ public class DiagonalLine extends ThreeClicksBuildMode {
+ 
+ 	//Add diagonal line from first to second
+ 	public static List<BlockPos> getDiagonalLineBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, float sampleMultiplier) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		Vec3 first = new Vec3(x1, y1, z1).add(0.5, 0.5, 0.5);
+ 		Vec3 second = new Vec3(x2, y2, z2).add(0.5, 0.5, 0.5);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
+index 146ca3d..bee4c0a 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
+@@ -11,7 +11,7 @@ public class DiagonalWall extends ThreeClicksBuildMode {
+ 
+ 	//Add diagonal wall from first to second
+ 	public static List<BlockPos> getDiagonalWallBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		//Get diagonal line blocks
+ 		List<BlockPos> diagonalLineBlocks = DiagonalLine.getDiagonalLineBlocks(player, x1, y1, z1, x2, y2, z2, 1);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
+index a1cdf6f..334abe6 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
+@@ -38,7 +38,7 @@ public class Floor extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getFloorBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (ModeOptions.getFill() == ModeOptions.ActionEnum.FULL)
+ 			addFloorBlocks(list, x1, x2, y1, z1, z2);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
+index ac22bdf..f2071a4 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
+@@ -63,7 +63,7 @@ public class Line extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getLineBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (x1 != x2) {
+ 			addXLineBlocks(list, x1, x2, y1, z1);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
+index 8451ca3..3ee14db 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
+@@ -14,7 +14,7 @@ public class SlopeFloor extends ThreeClicksBuildMode {
+ 
+ 	//Add slope floor from first to second
+ 	public static List<BlockPos> getSlopeFloorBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		int axisLimit = ServerConfig.INSTANCE.getMaxBlocksPerAxis(player);
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
+index 1150c94..d2c46ac 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
+@@ -12,7 +12,7 @@ import java.util.List;
+ public class Sphere extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getSphereBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		float centerX = x1;
+ 		float centerY = y1;
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
+index ef58848..82b1358 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
+@@ -53,7 +53,7 @@ public class Wall extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getWallBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (x1 == x2) {
+ 			if (ModeOptions.getFill() == ModeOptions.ActionEnum.FULL)
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
+index bc5059e..b682003 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
+@@ -53,6 +53,7 @@ public class BuildModeSystem implements IBuildSystem {
+     /** Clears the context after pipeline execution. */
+     public static void clearContext() {
+         CONTEXT.remove();
++        ModeOptions.clearCalculation();
+     }
+ 
+     @Override
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
+index 9ae43a0..b81eb86 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
+@@ -1,5 +1,7 @@
+ package nl.requios.effortlessbuilding.buildpipeline;
+ 
++import nl.requios.effortlessbuilding.backend.BuildBudget;
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.component.DataComponents;
+ import net.minecraft.world.entity.player.Player;
+@@ -141,6 +143,14 @@ public class BuildPipeline {
+                                                 ModeOptions.ActionEnum fill, ModeOptions.ActionEnum cubeFill,
+                                                 ModeOptions.ActionEnum raisedEdge, ModeOptions.ActionEnum circleStart,
+                                                 boolean protectTileEntities) {
++        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
++                && (!BackendRules.canBuild(serverPlayer)
++                || !BackendRules.validAnchor(serverPlayer, firstPos))) return null;
++        if (!BuildBudget.acceptsBounds(firstPos, secondPos, thirdPos)) {
++            player.sendOverlayMessage(net.minecraft.network.chat.Component.literal("Build bounds are too large to calculate safely."));
++            return null;
++        }
++        BuildBudget.begin();
+         BuildModeSystem.setContext(new BuildModeSystem.Context(
+                 mode, firstPos, secondPos, thirdPos, fill, cubeFill, raisedEdge, circleStart));
+         ConstraintSystem.setPlacementContext(new ConstraintSystem.PlacementContext(protectTileEntities));
+@@ -149,7 +159,11 @@ public class BuildPipeline {
+             processBlocks(blockSet, player, action);
+             if (blockSet.isEmpty()) return null;
+             return blockSet;
++        } catch (BuildBudget.Exceeded ignored) {
++            player.sendOverlayMessage(net.minecraft.network.chat.Component.literal("Build is too large to calculate safely."));
++            return null;
+         } finally {
++            BuildBudget.end();
+             BuildModeSystem.clearContext();
+             ConstraintSystem.clearPlacementContext();
+         }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipelineClient.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipelineClient.java
+index 463cd90..528c2db 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipelineClient.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipelineClient.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.buildpipeline;
+ 
++import nl.requios.effortlessbuilding.platform.Services;
+ import net.minecraft.client.Minecraft;
+ import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+ import net.minecraft.core.BlockPos;
+@@ -95,6 +96,7 @@ public class BuildPipelineClient {
+      * Returns {@code true} if the mod should intercept vanilla click handling.
+      */
+     public static boolean shouldInterceptPlacing() {
++        if (!Services.NETWORK.isServerAvailable()) return false;
+         Minecraft mc = Minecraft.getInstance();
+         return BuildModes.CLIENT.getBuildMode() != BuildModeEnum.DISABLED
+                 || mc.player != null && mc.player.getMainHandItem().getItem() instanceof RandomizerToolItem;
+@@ -104,6 +106,7 @@ public class BuildPipelineClient {
+      * Returns {@code true} if the mod should intercept vanilla break handling.
+      */
+     public static boolean shouldInterceptBreaking() {
++        if (!Services.NETWORK.isServerAvailable()) return false;
+         if (BuildModes.CLIENT.getBuildMode() == BuildModeEnum.DISABLED) return false;
+         Minecraft mc = Minecraft.getInstance();
+         Player player = mc.player;
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
+index 7a887a3..ea33e59 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.buildpipeline;
+ 
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.level.Level;
+@@ -61,6 +62,9 @@ public class ConstraintSystem implements IBuildSystem {
+             BlockPos pos = mapEntry.getKey();
+             if (level.isOutsideBuildHeight(pos) || !worldBorder.isWithinBounds(pos)) {
+                 entry.markRejected(BlockStatus.WORLD_BORDER);
++            } else if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
++                    && !BackendRules.canChange(serverPlayer, serverPlayer.level(), pos)) {
++                entry.markRejected(BlockStatus.PROTECTED_POSITION);
+             }
+         }
+ 
+@@ -76,7 +80,7 @@ public class ConstraintSystem implements IBuildSystem {
+         }
+ 
+         // Protected tile entities — applies to ALL players (including creative)
+-        boolean protectTiles = getProtectTileEntities();
++        boolean protectTiles = getProtectTileEntities(level.isClientSide());
+         if (protectTiles) {
+             for (var mapEntry : blocks.entrySet()) {
+                 BlockEntry entry = mapEntry.getValue();
+@@ -117,6 +121,11 @@ public class ConstraintSystem implements IBuildSystem {
+ 
+ 
+             // Only placed blocks check
++            if (state.getDestroySpeed(level, pos) < 0) {
++                entry.markRejected(BlockStatus.TOO_HARD);
++                continue;
++            }
++
+             if (ServerConfig.INSTANCE.survivalOnlyPlacedBlocks
+                     && !PlacedBlockTracker.isTrackedAnySide(player, level, pos)) {
+                 entry.markRejected(BlockStatus.NOT_PLACED_BY_PLAYER);
+@@ -145,11 +154,12 @@ public class ConstraintSystem implements IBuildSystem {
+      * Gets the protectTileEntities setting. Server reads from ThreadLocal context,
+      * client reads from ClientConfig.
+      */
+-    private boolean getProtectTileEntities() {
++    private boolean getProtectTileEntities(boolean clientSide) {
+         PlacementContext ctx = PLACEMENT_CTX.get();
+         if (ctx != null) {
+             return ctx.protectTileEntities();
+         }
++        if (!clientSide) return true;
+         // Client-side: read from ClientConfig
+         try {
+             return nl.requios.effortlessbuilding.config.ClientConfig.INSTANCE.shouldProtectTileEntities();
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/compat/ae2/AE2Integration.java b/common/src/main/java/nl/requios/effortlessbuilding/compat/ae2/AE2Integration.java
+index c09b44c..73887c1 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/compat/ae2/AE2Integration.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/compat/ae2/AE2Integration.java
+@@ -152,6 +152,8 @@ public class AE2Integration {
+ 
+     private static final Map<Item, Integer> cachedCounts = new HashMap<>();
+ 
++    public static void clearCache() { cachedCounts.clear(); }
++
+     /** Called on the client when SyncAE2CountS2CPacket arrives. */
+     public static void setCachedCount(Item item, int count) {
+         cachedCounts.put(item, count);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
+index 1bfac94..a305a37 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
+@@ -69,6 +69,9 @@ public class RandomizerMenu extends AbstractContainerMenu {
+ 
+     @Override
+     public void clicked(int slotId, int button, ContainerInput clickType, Player player) {
++        // The editor may not move the stack whose configuration it is editing.
++        int toolSlot = player.getInventory().getSelectedSlot();
++        if (slotId == PLAYER_MAIN_END + toolSlot || clickType == ContainerInput.SWAP && button == toolSlot) return;
+         if (slotId >= 0 && slotId < GHOST_SLOT_END) {
+             ItemStack source = clickType == ContainerInput.SWAP && button >= 0 && button < 9
+                     ? player.getInventory().getItem(button)
+@@ -172,7 +175,7 @@ public class RandomizerMenu extends AbstractContainerMenu {
+ 
+     @Override
+     public boolean stillValid(Player player) {
+-        return player.isAlive();
++        return player.isAlive() && player.getMainHandItem() == tool;
+     }
+ 
+     private static final class GhostSlot extends Slot {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
+index ad9d3e1..5bd675d 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
+@@ -7,7 +7,6 @@ import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.item.BlockItem;
+ import net.minecraft.world.item.context.BlockPlaceContext;
+ import net.minecraft.world.level.Level;
+-import nl.requios.effortlessbuilding.buildpipeline.BuildPipelineClient;
+ import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
+ import org.spongepowered.asm.mixin.Mixin;
+ import org.spongepowered.asm.mixin.injection.At;
+@@ -19,15 +18,6 @@ import java.util.List;
+ @Mixin(BlockItem.class)
+ public class MixinBlockItem {
+ 
+-    // Safety net: cancel vanilla block placement whenever the build pipeline should intercept.
+-    @Inject(method = "place(Lnet/minecraft/world/item/context/BlockPlaceContext;)Lnet/minecraft/world/InteractionResult;", at = @At("HEAD"), cancellable = true)
+-    private void onPlace(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
+-        if (!context.getLevel().isClientSide()) return;
+-        if (!BuildPipelineClient.shouldInterceptPlacing()) return;
+-        cir.setReturnValue(InteractionResult.SUCCESS);
+-        cir.cancel();
+-    }
+-
+     // Track vanilla single-block placements so survival players can break them with build-mode breaking.
+     @Inject(method = "place(Lnet/minecraft/world/item/context/BlockPlaceContext;)Lnet/minecraft/world/InteractionResult;", at = @At("TAIL"))
+     private void effortlessbuilding$trackPlacement(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinGameRenderer.java b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinGameRenderer.java
+index e94f3a8..4d7edab 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinGameRenderer.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinGameRenderer.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.mixin;
+ 
++import nl.requios.effortlessbuilding.platform.Services;
+ import net.minecraft.client.Minecraft;
+ import net.minecraft.world.phys.HitResult;
+ import nl.requios.effortlessbuilding.buildpipeline.BuildPipeline;
+@@ -26,6 +27,7 @@ public class MixinGameRenderer {
+     private void onPick(float partialTicks, CallbackInfo ci) {
+         Minecraft minecraft = (Minecraft) (Object) this;
+         if (minecraft.player == null || minecraft.level == null) return;
++        if (!Services.NETWORK.isServerAvailable()) return;
+         if (BuildModes.CLIENT.getBuildMode() == BuildModeEnum.DISABLED) return;
+ 
+         // Extend reach for build trigger items, empty hand (breaking/pick block), or mid-sequence.
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java b/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
+index f0eb7da..8e84a49 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
+@@ -65,6 +65,7 @@ public class ModifierSerializer {
+         try {
+             JsonArray array = JsonParser.parseString(json).getAsJsonArray();
+             for (JsonElement element : array) {
++                if (result.size() >= 32) break;
+                 JsonObject obj = element.getAsJsonObject();
+                 IModifier modifier = deserializeModifier(obj);
+                 if (modifier == null) continue;
+@@ -125,7 +126,8 @@ public class ModifierSerializer {
+     }
+ 
+     private static double getDouble(JsonObject obj, String key, double fallback) {
+-        return obj.has(key) ? obj.get(key).getAsDouble() : fallback;
++        double value = obj.has(key) ? obj.get(key).getAsDouble() : fallback;
++        return Double.isFinite(value) ? Math.clamp(value, -30_000_000, 30_000_000) : fallback;
+     }
+ 
+     private static boolean getBoolean(JsonObject obj, String key, boolean fallback) {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java b/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
+index 327c238..91955f1 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
+@@ -38,17 +38,18 @@ public class RadialMirrorModifier extends AbstractModifier {
+     @Override
+     public void processBlocks(BlockSet blocks, Player player, BuildPipeline.BuildState action) {
+         if (slices <= 1) return;
++        int effectiveSlices = Math.min(slices, ServerConfig.INSTANCE.getMaxArrayCount(player));
+         int effectiveSize = Math.min(size, ServerConfig.INSTANCE.getMaxMirrorSize(player));
+         List<BlockPos> snapshot = new ArrayList<>(blocks.keySet());
+ 
+-        for (int i = 1; i < slices; i++) {
+-            double angle = (2 * Math.PI * i) / slices;
++        for (int i = 1; i < effectiveSlices; i++) {
++            double angle = (2 * Math.PI * i) / effectiveSlices;
+             addRotated(blocks, snapshot, angle, false, effectiveSize);
+         }
+ 
+         if (mirrorSlices) {
+-            for (int i = 0; i < slices; i++) {
+-                double angle = (2 * Math.PI * i) / slices;
++            for (int i = 0; i < effectiveSlices; i++) {
++                double angle = (2 * Math.PI * i) / effectiveSlices;
+                 addRotated(blocks, snapshot, angle, true, effectiveSize);
+             }
+         }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
+index d7d3075..8e14987 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
+@@ -118,6 +118,8 @@ public class PacketHandler {
+      * Called on the server when a {@link PlaceBuildModePacket} is received.
+      */
+     public static void handlePlaceBuildMode(PlaceBuildModePacket packet, ServerPlayer player) {
++        if (!Double.isFinite(packet.hitLocation().x) || !Double.isFinite(packet.hitLocation().y)
++                || !Double.isFinite(packet.hitLocation().z)) return;
+         ServerLevel level = player.level();
+ 
+         // Run the full server pipeline: BuildMode → Modifiers → Constraints
+@@ -136,6 +138,8 @@ public class PacketHandler {
+         blockSet.sortByDistance();
+ 
+         ItemStack held = player.getItemInHand(InteractionHand.MAIN_HAND);
++        if (held.getItem() instanceof net.minecraft.world.item.GameMasterBlockItem
++                && !player.canUseGameMasterBlocks()) return;
+         ItemStack offHand = player.getItemInHand(InteractionHand.OFF_HAND);
+         boolean creative = player.isCreative();
+ 
+@@ -171,6 +175,8 @@ public class PacketHandler {
+                 BlockPos pos = mapEntry.getKey();
+                 BlockEntry entry = mapEntry.getValue();
+                 if (!(entry.item instanceof BlockItem blockItem)) continue;
++                if (blockItem instanceof net.minecraft.world.item.GameMasterBlockItem
++                        && !player.canUseGameMasterBlocks()) continue;
+                 if (!creative && used.getOrDefault(entry.item, 0) >= available.getOrDefault(entry.item, 0)) continue;
+                 if (!BuildSettings.canPlaceAt(level, pos, replaceMode, offHand)) continue;
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/platform/services/INetworkHelper.java b/common/src/main/java/nl/requios/effortlessbuilding/platform/services/INetworkHelper.java
+index 792db6c..b81d90f 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/platform/services/INetworkHelper.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/platform/services/INetworkHelper.java
+@@ -15,6 +15,9 @@ import nl.requios.effortlessbuilding.network.BuildModeHintC2SPacket;
+ 
+ public interface INetworkHelper {
+ 
++    /** Client-side check before intercepting vanilla actions. */
++    default boolean isServerAvailable() { return true; }
++
+     void sendToServer(PlaceBuildModePacket packet);
+ 
+     void sendToServer(BreakBuildModePacket packet);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/screen/RadialMenu.java b/common/src/main/java/nl/requios/effortlessbuilding/screen/RadialMenu.java
+index 99a17af..3097720 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/screen/RadialMenu.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/screen/RadialMenu.java
+@@ -297,7 +297,7 @@ public class RadialMenu extends Screen {
+ 			final double x = (menuRegion.x1 + menuRegion.x2) * 0.5 * (ringOuterEdge * 0.55 + 0.45 * ringInnerEdge) * scale;
+ 			final double y = (menuRegion.y1 + menuRegion.y2) * 0.5 * (ringOuterEdge * 0.55 + 0.45 * ringInnerEdge) * scale;
+ 
+-			menuRegion.mode.icon.render(graphics, (int) (middleX + x - 8), (int) (middleY + y - 8));
++			IconRenderer.render(menuRegion.mode.icon, graphics, (int) (middleX + x - 8), (int) (middleY + y - 8));
+ 		}
+ 
+ 		//Draw action icons
+@@ -306,7 +306,7 @@ public class RadialMenu extends Screen {
+ 			final double x = (button.x1 + button.x2) / 2 * scale;
+ 			final double y = (button.y1 + button.y2) / 2 * scale;
+ 
+-			button.getIcon().render(graphics, (int) (middleX + x - 8), (int) (middleY + y - 8));
++			IconRenderer.render(button.getIcon(), graphics, (int) (middleX + x - 8), (int) (middleY + y - 8));
+ 		}
+ 	}
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
+index ec3b74a..efcf6a9 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.utilities;
+ 
++import nl.requios.effortlessbuilding.backend.BuildBudget;
+ import net.minecraft.core.BlockPos;
+ import nl.requios.effortlessbuilding.Constants;
+ import org.jetbrains.annotations.NotNull;
+@@ -43,7 +44,9 @@ public class BlockSet extends LinkedHashMap<BlockPos, BlockEntry> implements Ite
+     }
+ 
+     public void add(BlockEntry blockEntry) {
++        BuildBudget.visit();
+         if (!containsKey(blockEntry.blockPos)) {
++            BuildBudget.check(size());
+             put(blockEntry.blockPos, blockEntry);
+         } else {
+             if (logging) Constants.LOG.debug("BlockSet already contains block at {}", blockEntry.blockPos);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
+index 9055ec0..72ae2ca 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
+@@ -25,6 +25,8 @@ public enum BlockStatus {
+     MAX_BLOCKS_EXCEEDED,
+     /** Block is outside the world border or build height. */
+     WORLD_BORDER,
++    /** Server rejected the position (unloaded chunk, game mode or spawn protection). */
++    PROTECTED_POSITION,
+     /** Tile entity is protected by config. */
+     PROTECTED_TILE_ENTITY,
+     /** Survival: player doesn't have enough items. */
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
+index a81a164..2d64a8a 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.utilities;
+ 
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.resources.ResourceKey;
+ import net.minecraft.server.level.ServerLevel;
+@@ -65,6 +66,7 @@ public class UndoManager {
+      * consumes items from inventory (positions without enough items are skipped).
+      */
+     public static int undo(ServerPlayer player) {
++        if (!BackendRules.canBuild(player)) return -1;
+         UUID id = player.getUUID();
+         Deque<UndoEntry> undoStack = undoStacks.get(id);
+         if (undoStack == null || undoStack.isEmpty()) return -1;
+@@ -81,6 +83,7 @@ public class UndoManager {
+ 
+         for (var e : entry.changes().entrySet()) {
+             BlockPos pos = e.getKey();
++            if (!BackendRules.canChange(player, level, pos)) continue;
+             BlockChange change = e.getValue();
+             BlockState oldState = change.oldState();
+             BlockState newState = change.newState();
+@@ -134,6 +137,7 @@ public class UndoManager {
+      * In survival, redoing a placement consumes items; redoing a break gives items back.
+      */
+     public static int redo(ServerPlayer player) {
++        if (!BackendRules.canBuild(player)) return -1;
+         UUID id = player.getUUID();
+         Deque<UndoEntry> redoStack = redoStacks.get(id);
+         if (redoStack == null || redoStack.isEmpty()) return -1;
+@@ -150,6 +154,7 @@ public class UndoManager {
+ 
+         for (var e : entry.changes().entrySet()) {
+             BlockPos pos = e.getKey();
++            if (!BackendRules.canChange(player, level, pos)) continue;
+             BlockChange change = e.getValue();
+             BlockState oldState = change.oldState();
+             BlockState newState = change.newState();
+diff --git a/common/src/main/resources/effortlessbuilding.mixins.json b/common/src/main/resources/effortlessbuilding.mixins.json
+index c595b6c..6cb6222 100644
+--- a/common/src/main/resources/effortlessbuilding.mixins.json
++++ b/common/src/main/resources/effortlessbuilding.mixins.json
+@@ -12,11 +12,11 @@
+     "GuiGraphicsAccessor",
+     "KeyMappingAccessor",
+     "MixinGameRenderer",
+-    "MixinMinecraft"
++    "MixinMinecraft",
++    "MixinBlockItemClient"
+   ],
+   "server": [],
+   "injectors": {
+     "defaultRequire": 1
+   }
+ }
+-
+diff --git a/fabric/build.gradle b/fabric/build.gradle
+index 3939e86..cf7ac48 100644
+--- a/fabric/build.gradle
++++ b/fabric/build.gradle
+@@ -3,6 +3,7 @@ plugins {
+     id 'net.fabricmc.fabric-loom'
+ }
+ repositories {
++    maven { url = 'https://maven.nucleoid.xyz' }
+     maven {
+         name = 'TerraformersMC'
+         url = 'https://maven.terraformersmc.com/'
+@@ -13,6 +14,9 @@ repositories {
+     }
+ }
+ dependencies {
++    // Polymer keeps the randomizer's registry entries and item stacks off vanilla connections.
++    implementation include('eu.pb4:polymer-core:0.18.5+26.3')
++    include('eu.pb4:polymer-common:0.18.5+26.3')
+     minecraft("com.mojang:minecraft:${minecraft_version}")
+     implementation("net.fabricmc:fabric-loader:${fabric_loader_version}")
+     implementation("net.fabricmc.fabric-api:fabric-api:${fabric_version}")
+@@ -44,6 +48,12 @@ loom {
+             ideConfigGenerated(true)
+             runDir('runs/server')
+         }
++        backendTestServer {
++            server()
++            setConfigName('Fabric Backend Test Server')
++            runDir('build/backend-test/server')
++            programArgs '--nogui'
++        }
+     }
+ }
+ 
+@@ -64,4 +74,55 @@ sourceSets.configureEach {
+             }
+         }
+     }
+-}
+\ No newline at end of file
++}
++
++// Headless protocol probe uses Mojang's client codecs without launching Fabric or any client mods.
++sourceSets {
++    backendProbe {
++        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
++        runtimeClasspath += sourceSets.main.runtimeClasspath
++    }
++}
++tasks.register('backendProbe', JavaExec) {
++    classpath = sourceSets.backendProbe.runtimeClasspath
++    mainClass = 'nl.requios.effortlessbuilding.test.BackendProtocolProbe'
++    workingDir = layout.buildDirectory.dir('backend-test/probe').get().asFile
++    doFirst { workingDir.mkdirs() }
++    args providers.gradleProperty('probeMode').getOrElse('vanilla')
++}
++
++tasks.register('prepareBackendTestServer') {
++    def testDirectory = layout.buildDirectory.dir('backend-test/server')
++    doLast {
++        def directory = testDirectory.get().asFile
++        directory.mkdirs()
++        def eula = new File(directory, 'eula.txt')
++        if (providers.gradleProperty('acceptMinecraftEula').getOrElse('false') == 'true') {
++            eula.text = 'eula=true\n'
++        }
++        if (!eula.exists() || !eula.text.contains('eula=true')) {
++            throw new GradleException('Accept the Minecraft EULA for this isolated test server using -PacceptMinecraftEula=true.')
++        }
++        new File(directory, 'server.properties').text = '''online-mode=false
++server-ip=127.0.0.1
++server-port=25576
++white-list=false
++level-name=backend-test
++level-type=minecraft:flat
++generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains"}
++spawn-protection=0
++view-distance=2
++simulation-distance=2
++max-players=4
++pause-when-empty-seconds=0
++enable-rcon=true
++rcon.port=25577
++rcon.password=backend-probe-local-only
++broadcast-rcon-to-ops=false
++'''
++    }
++}
++tasks.matching { it.name == 'runBackendTestServer' }.configureEach {
++    dependsOn tasks.named('prepareBackendTestServer')
++}
++tasks.named('check') { dependsOn tasks.named('compileBackendProbeJava') }
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuilding.java b/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuilding.java
+index aa10d3e..4092adc 100644
+--- a/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuilding.java
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuilding.java
+@@ -1,10 +1,6 @@
+ package nl.requios.effortlessbuilding;
+ 
+ import net.fabricmc.api.ModInitializer;
+-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+-import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+-import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+ import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
+ import net.minecraft.core.Registry;
+ import net.minecraft.core.registries.BuiltInRegistries;
+@@ -13,113 +9,24 @@ import net.minecraft.resources.Identifier;
+ import net.minecraft.resources.ResourceKey;
+ import net.minecraft.world.item.CreativeModeTabs;
+ import net.minecraft.world.item.Item;
++import nl.requios.effortlessbuilding.backend.FabricBackend;
++import nl.requios.effortlessbuilding.backend.FabricContent;
+ import nl.requios.effortlessbuilding.menu.ModMenus;
+-import net.minecraft.server.level.ServerPlayer;
+-import nl.requios.effortlessbuilding.modifier.ModifierServerStorage;
+-import nl.requios.effortlessbuilding.network.BreakBuildModePacket;
+-import nl.requios.effortlessbuilding.network.PacketHandler;
+-import nl.requios.effortlessbuilding.network.PlaceBuildModePacket;
+-import nl.requios.effortlessbuilding.network.UndoPacket;
+-import nl.requios.effortlessbuilding.network.RedoPacket;
+-import nl.requios.effortlessbuilding.network.UpdateModifiersC2SPacket;
+-import nl.requios.effortlessbuilding.network.SyncModifiersS2CPacket;
+-import nl.requios.effortlessbuilding.network.UpdateServerConfigC2SPacket;
+-import nl.requios.effortlessbuilding.network.SyncServerConfigS2CPacket;
+-import nl.requios.effortlessbuilding.network.QueryAE2CountC2SPacket;
+-import nl.requios.effortlessbuilding.network.SyncAE2CountS2CPacket;
+-import nl.requios.effortlessbuilding.network.BuildModeHintC2SPacket;
+-import nl.requios.effortlessbuilding.config.ServerConfig;
+-import nl.requios.effortlessbuilding.config.ServerConfigStorage;
+-import nl.requios.effortlessbuilding.config.WelcomeMessageStorage;
+-import nl.requios.effortlessbuilding.config.BuildModeHintStorage;
+-import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
+-import nl.requios.effortlessbuilding.utilities.UndoManager;
+-import nl.requios.effortlessbuilding.item.RandomizerToolItem;
+ 
+ public class EffortlessBuilding implements ModInitializer {
+-
+     @Override
+     public void onInitialize() {
+-        Constants.LOG.info("Hello Fabric world!");
+-
+-        Identifier randomizerToolId = Identifier.fromNamespaceAndPath(Constants.MOD_ID, "randomizer_tool");
+-        Item randomizerTool = Registry.register(BuiltInRegistries.ITEM, randomizerToolId,
+-                new RandomizerToolItem(new Item.Properties()
+-                        .setId(ResourceKey.create(Registries.ITEM, randomizerToolId))
+-                        .stacksTo(1)));
++        Identifier id = Identifier.fromNamespaceAndPath(Constants.MOD_ID, "randomizer_tool");
++        Item randomizer = Registry.register(BuiltInRegistries.ITEM, id,
++                FabricContent.createRandomizer(new Item.Properties()
++                        .setId(ResourceKey.create(Registries.ITEM, id)).stacksTo(1)));
+         CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES)
+-                .register(entries -> entries.accept(randomizerTool));
++                .register(entries -> entries.accept(randomizer));
+         Registry.register(BuiltInRegistries.MENU,
+                 Identifier.fromNamespaceAndPath(Constants.MOD_ID, "randomizer"), ModMenus.RANDOMIZER);
+-
+-        // Register C2S packets
+-        PayloadTypeRegistry.serverboundPlay().register(PlaceBuildModePacket.TYPE, PlaceBuildModePacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(BreakBuildModePacket.TYPE, BreakBuildModePacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(UndoPacket.TYPE, UndoPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(RedoPacket.TYPE, RedoPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(UpdateModifiersC2SPacket.TYPE, UpdateModifiersC2SPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(UpdateServerConfigC2SPacket.TYPE, UpdateServerConfigC2SPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(QueryAE2CountC2SPacket.TYPE, QueryAE2CountC2SPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.serverboundPlay().register(BuildModeHintC2SPacket.TYPE, BuildModeHintC2SPacket.STREAM_CODEC);
+-
+-        // Register S2C packets
+-        PayloadTypeRegistry.clientboundPlay().register(SyncModifiersS2CPacket.TYPE, SyncModifiersS2CPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.clientboundPlay().register(SyncServerConfigS2CPacket.TYPE, SyncServerConfigS2CPacket.STREAM_CODEC);
+-        PayloadTypeRegistry.clientboundPlay().register(SyncAE2CountS2CPacket.TYPE, SyncAE2CountS2CPacket.STREAM_CODEC);
+-
+-        // Register server-side handlers
+-        ServerPlayNetworking.registerGlobalReceiver(PlaceBuildModePacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handlePlaceBuildMode(payload, context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(BreakBuildModePacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleBreakBuildMode(payload, context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(UndoPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleUndo(context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(RedoPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleRedo(context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(UpdateModifiersC2SPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleUpdateModifiers(payload, context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(UpdateServerConfigC2SPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleUpdateServerConfig(payload, context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(QueryAE2CountC2SPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleQueryAE2Count(payload, context.player())));
+-        ServerPlayNetworking.registerGlobalReceiver(BuildModeHintC2SPacket.TYPE, (payload, context) ->
+-                context.server().execute(() -> PacketHandler.handleBuildModeHint(context.player())));
+-
+-        // Load + send modifiers and config on player join
+-        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+-            ServerPlayer player = handler.getPlayer();
+-            ModifierServerStorage.loadPlayer(server, player.getUUID());
+-            PacketHandler.sendToClient(player, new SyncModifiersS2CPacket(
+-                    ModifierServerStorage.serializePlayer(player.getUUID())));
+-            PacketHandler.sendToClient(player, new SyncServerConfigS2CPacket(
+-                    ServerConfig.INSTANCE.toJson()));
+-            WelcomeMessageStorage.showIfNeeded(player);
+-        });
+-
+-        // Save + clean up on player disconnect
+-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+-            ServerPlayer player = handler.getPlayer();
+-            ModifierServerStorage.savePlayer(server, player.getUUID());
+-            ModifierServerStorage.removePlayer(player.getUUID());
+-            UndoManager.clearPlayer(player.getUUID());
+-            PlacedBlockTracker.clearPlayer(player.getUUID());
+-        });
+-
+-        // Clear all cached data when the server stops
+-        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+-            ModifierServerStorage.clearAll();
+-            ServerConfigStorage.clear();
+-            WelcomeMessageStorage.clear();
+-            BuildModeHintStorage.clear();
+-        });
+-
+-        // Load server config on server start
+-        ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+-            ServerConfigStorage.load(server);
+-            WelcomeMessageStorage.load(server);
+-            BuildModeHintStorage.load(server);
+-        });
+-
++        FabricContent.registerMenu();
++        FabricBackend.initialize();
+         CommonClass.init();
++        Constants.LOG.info("Effortless Building Fabric backend initialized (client mod optional)");
+     }
+ }
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuildingClient.java b/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuildingClient.java
+index 9ce2cc5..cf868aa 100644
+--- a/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuildingClient.java
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/EffortlessBuildingClient.java
+@@ -4,6 +4,15 @@ import net.fabricmc.api.ClientModInitializer;
+ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+ import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
++import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
++import nl.requios.effortlessbuilding.backend.BackendSession;
++import nl.requios.effortlessbuilding.network.BackendHelloPacket;
++import nl.requios.effortlessbuilding.platform.FabricClientNetwork;
++import nl.requios.effortlessbuilding.buildmode.BuildModes;
++import nl.requios.effortlessbuilding.buildmode.BuildModeEnum;
++import nl.requios.effortlessbuilding.modifier.ModifierSystem;
++import nl.requios.effortlessbuilding.config.ServerConfig;
++import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
+ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+ import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+ import net.fabricmc.fabric.api.client.rendering.v1.ClientTooltipComponentCallback;
+@@ -43,6 +52,26 @@ public class EffortlessBuildingClient implements ClientModInitializer {
+     @Override
+     public void onInitializeClient() {
+         ClientConfig.INSTANCE.load();
++        ClientPlayNetworking.registerGlobalReceiver(BackendHelloPacket.TYPE, (packet, context) -> {
++            FabricClientNetwork.ready = packet.version() == BackendSession.PROTOCOL_VERSION;
++        });
++        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
++            FabricClientNetwork.ready = false;
++            if (ClientPlayNetworking.canSend(BackendHelloPacket.TYPE)) {
++                ClientPlayNetworking.send(new BackendHelloPacket(BackendSession.PROTOCOL_VERSION));
++            }
++        });
++        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
++            FabricClientNetwork.ready = false;
++            BuildPipelineClient.cancelCurrentSequence();
++            BuildModes.CLIENT.setBuildMode(BuildModeEnum.DISABLED);
++            ModifierSystem.CLIENT.clearModifiers();
++            ServerConfig.INSTANCE.reset();
++            PlacedBlockTracker.clearClient();
++            nl.requios.effortlessbuilding.compat.ae2.AE2Integration.clearCache();
++            prevRightDown = false;
++            prevLeftDown = false;
++        });
+         MenuScreens.register(ModMenus.RANDOMIZER, RandomizerScreen::new);
+         ClientTooltipComponentCallback.EVENT.register(data -> data instanceof RandomizerTooltipData randomizerData
+                 ? new RandomizerTooltipComponent(randomizerData) : null);
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricNetworkHelper.java b/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricNetworkHelper.java
+index b17cbe7..a95f0d3 100644
+--- a/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricNetworkHelper.java
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricNetworkHelper.java
+@@ -1,7 +1,7 @@
+ package nl.requios.effortlessbuilding.platform;
+ 
+-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
++import nl.requios.effortlessbuilding.backend.FabricBackend;
++
+ import net.minecraft.server.level.ServerPlayer;
+ import nl.requios.effortlessbuilding.network.BreakBuildModePacket;
+ import nl.requios.effortlessbuilding.network.PlaceBuildModePacket;
+@@ -18,59 +18,62 @@ import nl.requios.effortlessbuilding.platform.services.INetworkHelper;
+ 
+ public class FabricNetworkHelper implements INetworkHelper {
+ 
++    @Override
++    public boolean isServerAvailable() { return FabricClientNetwork.available(); }
++
+     @Override
+     public void sendToServer(PlaceBuildModePacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToServer(BreakBuildModePacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToServer(UndoPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToServer(RedoPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToServer(UpdateModifiersC2SPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToClient(ServerPlayer player, SyncModifiersS2CPacket packet) {
+-        ServerPlayNetworking.send(player, packet);
++        FabricBackend.send(player, packet);
+     }
+ 
+     @Override
+     public void sendToServer(UpdateServerConfigC2SPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToClient(ServerPlayer player, SyncServerConfigS2CPacket packet) {
+-        ServerPlayNetworking.send(player, packet);
++        FabricBackend.send(player, packet);
+     }
+ 
+     @Override
+     public void sendToServer(QueryAE2CountC2SPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToServer(BuildModeHintC2SPacket packet) {
+-        ClientPlayNetworking.send(packet);
++        FabricClientNetwork.send(packet);
+     }
+ 
+     @Override
+     public void sendToClient(ServerPlayer player, SyncAE2CountS2CPacket packet) {
+-        ServerPlayNetworking.send(player, packet);
++        FabricBackend.send(player, packet);
+     }
+ 
+ }
+diff --git a/fabric/src/main/resources/effortlessbuilding.fabric.mixins.json b/fabric/src/main/resources/effortlessbuilding.fabric.mixins.json
+index b92305b..cd619b2 100644
+--- a/fabric/src/main/resources/effortlessbuilding.fabric.mixins.json
++++ b/fabric/src/main/resources/effortlessbuilding.fabric.mixins.json
+@@ -4,11 +4,17 @@
+   "package": "nl.requios.effortlessbuilding.mixin",
+   "refmap": "${mod_id}.refmap.json",
+   "compatibilityLevel": "JAVA_25",
+-  "mixins": [],
++  "mixins": [
++    "OptionalContentMixin",
++    "OptionalContentSlotMixin",
++    "OptionalCraftingMixin",
++    "OptionalRecipeMixin",
++    "OptionalRecipeSyncMixin",
++    "OptionalContainerMixin"
++  ],
+   "client": [],
+   "server": [],
+   "injectors": {
+     "defaultRequire": 1
+   }
+ }
+-  
+diff --git a/fabric/src/main/resources/fabric.mod.json b/fabric/src/main/resources/fabric.mod.json
+index bcf1fe1..99cb0ee 100644
+--- a/fabric/src/main/resources/fabric.mod.json
++++ b/fabric/src/main/resources/fabric.mod.json
+@@ -32,7 +32,8 @@
+     "accessWidener": "${mod_id}.accesswidener",
+     "depends": {
+         "fabricloader": ">=${fabric_loader_version}",
+-        "fabric-api": "*",
++        "fabric-api": ">=${fabric_version}",
++        "polymer-core": ">=0.18.5",
+         "minecraft": "~${minecraft_version}",
+         "java": ">=${java_version}"
+     },
+diff --git a/gradle.properties b/gradle.properties
+index fb2a231..da97499 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -23,7 +23,7 @@ neo_form_version=26.3-1
+ ae2_version=26.3.1-alpha
+ 
+ # Fabric
+-fabric_version=0.160.6+26.3
++fabric_version=0.162.0+26.3
+ fabric_loader_version=0.19.5
+ 
+ # NeoForge
+diff --git a/bukkit/README.md b/bukkit/README.md
+new file mode 100644
+--- /dev/null
++++ b/bukkit/README.md
+@@ -0,0 +1,9 @@
++Bukkit/Paper backend placeholder
++===============================
++
++No plugin or Bukkit functionality is implemented here. The Fabric backend is the
++only supported server platform. A future adapter can reuse the backend lifecycle,
++connection sessions and authoritative build pipeline in `common/`, and provide
++its own networking, permissions, world and optional-content integration.
++
++This directory is deliberately excluded from Gradle until an implementation exists.
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendLifecycle.java b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendLifecycle.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendLifecycle.java
+@@ -0,0 +1,49 @@
++package nl.requios.effortlessbuilding.backend;
++
++import net.minecraft.server.MinecraftServer;
++import net.minecraft.server.level.ServerPlayer;
++import nl.requios.effortlessbuilding.config.*;
++import nl.requios.effortlessbuilding.modifier.ModifierServerStorage;
++import nl.requios.effortlessbuilding.network.*;
++import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
++import nl.requios.effortlessbuilding.utilities.UndoManager;
++
++/** Shared backend lifecycle; loader modules supply connection and packet transport hooks. */
++public final class BackendLifecycle {
++    private BackendLifecycle() {}
++
++    public static void started(MinecraftServer server) {
++        BackendSession.clear();
++        ServerConfigStorage.load(server);
++        WelcomeMessageStorage.load(server);
++        BuildModeHintStorage.load(server);
++    }
++
++    public static void ready(ServerPlayer player) {
++        ModifierServerStorage.loadPlayer(player.level().getServer(), player.getUUID());
++        PacketHandler.sendToClient(player, new SyncModifiersS2CPacket(
++                ModifierServerStorage.serializePlayer(player.getUUID())));
++        PacketHandler.sendToClient(player, new SyncServerConfigS2CPacket(ServerConfig.INSTANCE.toJson()));
++        WelcomeMessageStorage.showIfNeeded(player);
++        // Initial inventory/equipment packets may have been sent before opt-in.
++        player.inventoryMenu.sendAllDataToRemote();
++        player.getRecipeBook().sendInitialRecipeBook(player);
++    }
++
++    public static void disconnected(ServerPlayer player) {
++        ModifierServerStorage.savePlayer(player.level().getServer(), player.getUUID());
++        ModifierServerStorage.removePlayer(player.getUUID());
++        UndoManager.clearPlayer(player.getUUID());
++        PlacedBlockTracker.clearPlayer(player.getUUID());
++        BackendSession.disconnect(player.getUUID());
++    }
++
++    public static void stopped(MinecraftServer server) {
++        for (ServerPlayer player : server.getPlayerList().getPlayers()) disconnected(player);
++        ModifierServerStorage.clearAll();
++        BackendSession.clear();
++        ServerConfigStorage.clear();
++        WelcomeMessageStorage.clear();
++        BuildModeHintStorage.clear();
++    }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendRules.java b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendRules.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendRules.java
+@@ -0,0 +1,29 @@
++package nl.requios.effortlessbuilding.backend;
++
++import net.minecraft.core.BlockPos;
++import net.minecraft.server.level.ServerLevel;
++import net.minecraft.server.level.ServerPlayer;
++import net.minecraft.world.level.GameType;
++import nl.requios.effortlessbuilding.config.ServerConfig;
++
++/** Server-side authorization shared by build execution and undo/redo. */
++public final class BackendRules {
++    private BackendRules() {}
++
++    public static boolean canBuild(ServerPlayer player) {
++        GameType gameType = player.gameMode.getGameModeForPlayer();
++        return player.isAlive() && (gameType == GameType.CREATIVE || gameType == GameType.SURVIVAL);
++    }
++
++    public static boolean canChange(ServerPlayer player, ServerLevel level, BlockPos pos) {
++        if (!canBuild(player) || player.level() != level || level.isOutsideBuildHeight(pos)
++                || !level.getWorldBorder().isWithinBounds(pos) || !level.hasChunkAt(pos)) return false;
++        // Includes vanilla spawn protection. Claim mods must integrate their own protection checks.
++        return !level.getServer().isUnderSpawnProtection(level, pos, player) && level.mayInteract(player, pos);
++    }
++
++    public static boolean validAnchor(ServerPlayer player, BlockPos pos) {
++        double reach = ServerConfig.INSTANCE.getReach(player) + 2.0;
++        return pos != null && pos.distToCenterSqr(player.getEyePosition()) <= reach * reach;
++    }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendSession.java b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendSession.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/backend/BackendSession.java
+@@ -0,0 +1,40 @@
++package nl.requios.effortlessbuilding.backend;
++
++import java.util.Map;
++import java.util.UUID;
++import java.util.concurrent.ConcurrentHashMap;
++
++/** Connection-scoped opt-in state. Platforms call this only on the server thread. */
++public final class BackendSession {
++    public static final int PROTOCOL_VERSION = 1;
++    // Packet encoding can inspect capabilities on Netty threads.
++    private static final Map<UUID, BackendSession> SESSIONS = new ConcurrentHashMap<>();
++    private long windowStart;
++    private int requests;
++
++    private BackendSession() {}
++
++    public static boolean connect(UUID player, int version) {
++        if (version != PROTOCOL_VERSION || SESSIONS.containsKey(player)) return false;
++        SESSIONS.put(player, new BackendSession());
++        return true;
++    }
++
++    public static boolean supports(UUID player) {
++        return SESSIONS.containsKey(player);
++    }
++
++    /** Bound expensive requests, independently of packet size and shape limits. */
++    public static boolean acceptRequest(UUID player, long tick) {
++        BackendSession session = SESSIONS.get(player);
++        if (session == null) return false;
++        if (tick - session.windowStart >= 20) {
++            session.windowStart = tick;
++            session.requests = 0;
++        }
++        return ++session.requests <= 40;
++    }
++
++    public static void disconnect(UUID player) { SESSIONS.remove(player); }
++    public static void clear() { SESSIONS.clear(); }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/backend/BuildBudget.java b/common/src/main/java/nl/requios/effortlessbuilding/backend/BuildBudget.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/backend/BuildBudget.java
+@@ -0,0 +1,45 @@
++package nl.requios.effortlessbuilding.backend;
++
++import net.minecraft.core.BlockPos;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/** Stops shape and modifier expansion before allocating unbounded position collections. */
++public final class BuildBudget {
++    public static final int MAX_GENERATED_POSITIONS = 200_000;
++    private static final class Counter { int work; }
++    private static final ThreadLocal<Counter> ACTIVE = new ThreadLocal<>();
++    private BuildBudget() {}
++    public static void begin() { ACTIVE.set(new Counter()); }
++    public static void end() { ACTIVE.remove(); }
++    public static void visit() {
++        Counter counter = ACTIVE.get();
++        if (counter != null && ++counter.work > 1_000_000) throw new Exceeded();
++    }
++    /** Bound scanning work too: hollow shapes can visit many cells without adding entries. */
++    public static boolean acceptsBounds(BlockPos first, BlockPos second, BlockPos third) {
++        BlockPos end = third == null ? second : third;
++        long x = Math.max(Math.abs((long) first.getX() - second.getX()), Math.abs((long) first.getX() - end.getX())) + 1;
++        long y = Math.max(Math.abs((long) first.getY() - second.getY()), Math.abs((long) first.getY() - end.getY())) + 1;
++        long z = Math.max(Math.abs((long) first.getZ() - second.getZ()), Math.abs((long) first.getZ() - end.getZ())) + 1;
++        return x <= 1000 && y <= 1000 && z <= 1000 && x * y * z <= 1_000_000;
++    }
++    public static void check(int size) {
++        if (ACTIVE.get() != null && size >= MAX_GENERATED_POSITIONS) throw new Exceeded();
++    }
++    public static List<BlockPos> positions() {
++        if (ACTIVE.get() == null) return new ArrayList<>();
++        return new ArrayList<>() {
++            @Override
++            public boolean add(BlockPos pos) {
++                visit();
++                check(size());
++                return super.add(pos);
++            }
++        };
++    }
++    public static final class Exceeded extends RuntimeException {
++        private Exceeded() { super("Build exceeds generation budget", null, false, false); }
++    }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItemClient.java b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItemClient.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItemClient.java
+@@ -0,0 +1,22 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.world.InteractionResult;
++import net.minecraft.world.item.BlockItem;
++import net.minecraft.world.item.context.BlockPlaceContext;
++import nl.requios.effortlessbuilding.buildpipeline.BuildPipelineClient;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.Inject;
++import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
++
++/** Loaded exclusively on the physical client. */
++@Mixin(BlockItem.class)
++public class MixinBlockItemClient {
++    @Inject(method = "place(Lnet/minecraft/world/item/context/BlockPlaceContext;)Lnet/minecraft/world/InteractionResult;",
++            at = @At("HEAD"), cancellable = true)
++    private void effortlessbuilding$intercept(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
++        if (context.getLevel().isClientSide() && BuildPipelineClient.shouldInterceptPlacing()) {
++            cir.setReturnValue(InteractionResult.SUCCESS);
++        }
++    }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/network/BackendHelloPacket.java b/common/src/main/java/nl/requios/effortlessbuilding/network/BackendHelloPacket.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/network/BackendHelloPacket.java
+@@ -0,0 +1,19 @@
++package nl.requios.effortlessbuilding.network;
++
++import net.minecraft.network.FriendlyByteBuf;
++import net.minecraft.network.codec.StreamCodec;
++import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
++import net.minecraft.resources.Identifier;
++import nl.requios.effortlessbuilding.Constants;
++
++/** Optional play-phase opt-in, also echoed by the server as acknowledgement. */
++public record BackendHelloPacket(int version) implements CustomPacketPayload {
++    public static final Type<BackendHelloPacket> TYPE = new Type<>(
++            Identifier.fromNamespaceAndPath(Constants.MOD_ID, "backend_hello"));
++    public static final StreamCodec<FriendlyByteBuf, BackendHelloPacket> STREAM_CODEC = StreamCodec.of(
++            (buf, packet) -> buf.writeVarInt(packet.version()),
++            buf -> new BackendHelloPacket(buf.readVarInt()));
++
++    @Override
++    public Type<? extends CustomPacketPayload> type() { return TYPE; }
++}
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/screen/IconRenderer.java b/common/src/main/java/nl/requios/effortlessbuilding/screen/IconRenderer.java
+new file mode 100644
+--- /dev/null
++++ b/common/src/main/java/nl/requios/effortlessbuilding/screen/IconRenderer.java
+@@ -0,0 +1,14 @@
++package nl.requios.effortlessbuilding.screen;
++
++import net.minecraft.client.gui.GuiGraphicsExtractor;
++import net.minecraft.client.renderer.RenderPipelines;
++import nl.requios.effortlessbuilding.AllIcons;
++
++/** Rendering is separate from icon metadata referenced by server build-mode enums. */
++public final class IconRenderer {
++    private IconRenderer() {}
++    public static void render(AllIcons icon, GuiGraphicsExtractor graphics, int x, int y) {
++        graphics.blit(RenderPipelines.GUI_TEXTURED, AllIcons.ICON_ATLAS, x, y,
++                (float) icon.getIconX(), (float) icon.getIconY(), 16, 16, 256, 256);
++    }
++}
+diff --git a/docs/fabric-server-backend.md b/docs/fabric-server-backend.md
+new file mode 100644
+--- /dev/null
++++ b/docs/fabric-server-backend.md
+@@ -0,0 +1,143 @@
++# Fabric server backend (Minecraft 26.3)
++
++Install the Fabric JAR from `fabric/build/libs/` on the server and on players who
++want Effortless Building features. The server needs Java 25, Fabric Loader
++0.19.5 or newer, and Fabric API 0.162.0+26.3 or newer. Polymer Core and its support
++libraries are bundled in the mod JAR; no resource pack is required.
++
++Vanilla Minecraft 26.3 players can join the same server. They do not need this
++mod, Fabric, Polymer, or a resource pack. Use the updated client build from this
++repository: older clients without the backend opt-in protocol are not enabled.
++
++## Features and authority
++
++The existing shape generators, mirrors, arrays, radials, replace filters,
++weighted randomizer, survival material consumption, tool constraints, and
++undo/redo run through the shared server pipeline. The client keeps its radial
++menu, previews, shortcuts, and configuration screens. The server regenerates
++positions from the requested mode and corners; clients cannot supply the final
++block set.
++
++The randomizer remains a real custom item for modded players, with its existing
++recipe, palette, ratio editor, model, and tooltip. Shift-right-click opens its
++server-backed editor. Palette slots do not consume their sample items; survival
++building consumes the selected materials from inventory.
++
++World configuration and per-player modifiers retain their existing files under
++`<world>/effortlessbuilding/`. Only operators can update world configuration.
++Undo/redo and placed-block tracking remain session-scoped, as before.
++
++## Connection and content isolation
++
++* A companion client sends `backend_hello` in the play phase only if the server
++  advertises support. The server checks the protocol version and registered
++  response channels before enabling that connection.
++* Vanilla connections never have to answer a mod handshake or complete a custom
++  login/configuration task. Fabric/Polymer's optional discovery messages are
++  safely ignored by vanilla clients.
++* Every backend operation requires an enabled session. Every outgoing mod sync,
++  including configuration broadcasts and AE2 replies, checks both session state
++  and support for that particular channel.
++* Polymer marks the randomizer item and menu as server-only registry entries.
++  Item encoding returns the original stack to enabled clients and an **empty
++  stack** to other recipients. There is no vanilla substitute tool. This applies
++  to equipment, dropped items, shared containers, and nested item components.
++* Vanilla players cannot pick up dropped tools, transfer tools from containers,
++  use the tool, or craft it. The tool recipe is hidden from their recipe books.
++  Automated crafting of the tool is disabled because it has no modded player
++  context.
++* Disconnect removes capabilities and session state. The client resets build
++  sequences, modifiers, configuration, placement tracking, and AE2 count caches.
++  On servers without this backend, Fabric client click interception is disabled.
++
++[Polymer's item API](https://polymer.pb4.eu/latest/polymer-core/items/) and
++[registry filtering implementation](https://github.com/Patbox/polymer/tree/dev/26.3/polymer-reg-sync-manipulator)
++provide the per-recipient content translation. The mod does not implement
++vanilla versions of its features.
++
++## Server validation
++
++The backend rejects spectator/adventure building, out-of-reach initial anchors,
++unloaded chunks, out-of-height/border positions, and vanilla spawn protection.
++Survival also rejects unbreakable blocks. Undo/redo checks game mode, dimension,
++loaded chunks, borders, and spawn protection before changing the world.
++
++Calculation safety limits supplement the normal server configuration: at most
++32 modifiers, 200,000 generated positions, and 1,000,000 position-generation
++operations. Selection bounds may cover at most 1,000,000 cells, with at most
++1,000 cells per axis; centered circular shapes may scan a larger derived area.
++Requests exceeding these budgets are rejected before world mutation. Radial
++slices respect the configured array count limit. Connections are limited to
++40 backend requests per 20 server ticks.
++
++## Architecture
++
++* `common/.../backend`: session capabilities, lifecycle, authorization, and build
++  calculation budgets. Shared execution remains in the existing pipeline and
++  packet handlers.
++* `fabric/.../backend`: Fabric networking/events and Polymer content filtering.
++* Client networking, rendering helpers, and placement interception are kept out
++  of classes that the dedicated server must load.
++* `bukkit/`: documentation placeholder only, excluded from Gradle. There is no
++  Bukkit/Paper implementation. NeoForge was not developed or tested for this work.
++
++## Reproducing verification
++
++Build the distributable:
++
++```powershell
++.\gradlew.bat :fabric:build
++```
++
++Start the isolated test server in one terminal (the EULA flag applies only to
++`fabric/build/backend-test/server`):
++
++```powershell
++.\gradlew.bat :fabric:runBackendTestServer -PacceptMinecraftEula=true
++```
++
++After the server reports `Done`, run the mixed-client integration probe in a
++second terminal:
++
++```powershell
++.\gradlew.bat :fabric:backendProbe -PprobeMode=mixed
++```
++
++Stop the test server cleanly:
++
++```powershell
++.\gradlew.bat :fabric:backendProbe -PprobeMode=stop
++```
++
++The fixture binds Minecraft to **127.0.0.1:25576** and test-only RCON to
++**127.0.0.1:25577**. It uses an offline test world and the fixed test-only RCON
++password in `fabric/build.gradle`. The probe changes only that world's blocks,
++configuration, inventories, recipes, and the two named test accounts. These
++settings are not suitable for a public server.
++
++The probe opens real TCP connections using Mojang's 26.3 networking and registry
++decoders without launching Fabric or mods in the client processes. One process
++keeps strictly vanilla registries and sends no mod opt-in; the other emulates
++the companion's registries and packets. Test code is a separate source set and
++is excluded from the mod JAR. `:fabric:check` also compiles the probe; the network
++tests require the explicitly started fixture server.
++
++See [verification results](fabric-server-verification.md) for the completed run.
++
++## Limits and remaining manual checks
++
++This is compatibility for Effortless Building plus Fabric API and its bundled
++libraries. Installing other mods with mandatory client content, such as AE2,
++can independently make vanilla clients incompatible. The optional AE2 integration
++is retained but requires its own compatible environment and was not exercised
++in these mixed-client tests.
++
++Third-party claim/protection integrations are not implemented. Vanilla spawn
++protection is enforced; a claim plugin/mod needs an additional authorization
++adapter. Existing undo records contain block states, not complete block-entity
++snapshots; undo/redo does not promise restoration of container contents.
++
++The automated clients exercise networking and server behavior. They do not
++launch the graphical Minecraft client, so visual previews, textures, input,
++and singleplayer UI still need a manual play-through. No Bukkit/Paper or
++NeoForge support is claimed by this implementation.
+diff --git a/docs/fabric-server-verification.md b/docs/fabric-server-verification.md
+new file mode 100644
+--- /dev/null
++++ b/docs/fabric-server-verification.md
+@@ -0,0 +1,42 @@
++# Fabric backend verification
++
++Verified locally on 2026-10-28 with Minecraft 26.3, Java 25.0.3,
++Fabric Loader 0.19.5, Fabric API 0.162.0+26.3, and Polymer 0.18.5+26.3.
++
++* `:fabric:build` passed, including Java compilation, access-widener validation,
++  and compilation of the separate protocol probe. Existing Javadoc/deprecation
++  warnings remain.
++* A fresh dedicated server reached `Done`, accepted both test clients
++  simultaneously, and shut down cleanly through RCON.
++* The final mixed-client probe passed all **16 assertions**.
++* The vanilla process decoded **3,647 packets** using Mojang's vanilla registries
++  and codecs. It sent no backend opt-in and received no Effortless Building
++  feature/synchronization payloads or custom registry entries.
++* The companion protocol process decoded **1,813 packets**, received backend,
++  config and modifier synchronization, and exercised the real server handlers.
++* The distributable contains Polymer Core/Common and Core's nested
++  networking/registry-sync libraries. Probe classes are excluded from the JAR.
++
++| Area | Verified behavior |
++| --- | --- |
++| Opt-in | Build requests before negotiation are ignored, including after a previous connection by the same account. |
++| Building | Server generates and places a three-block line; breaking removes it. |
++| History | Undo removes the line; redo restores it. |
++| Modifiers | An array creates the original block and two offset copies. |
++| Permissions | Spectator placement is rejected. |
++| Materials | Survival placement with two blocks builds only two of three requested positions. |
++| Randomizer | The modded connection receives the real item, opens its custom menu, saves a ratio change, and places the selected material. |
++| Crafting | Identical filled crafting grids produce the tool for the modded player and an empty result for the vanilla player. |
++| Item isolation | Vanilla cannot pick up a dropped tool or shift-click a hidden tool from a shared chest. The tool remains in the chest. |
++| Vanilla gameplay | The vanilla player opens ordinary chests/crafting tables and transfers an ordinary stone item into its hotbar. |
++| Broadcasts | An operator updates server configuration while the vanilla client remains connected without receiving the custom synchronization. |
++
++The local run logs are preserved under
++`fabric/build/reports/backend-compatibility/`: `build.log`, `server.log`,
++`probe.log`, and `stop.log`. The tested JAR is
++`fabric/build/libs/effortlessbuilding-fabric-26.3-4.3.jar`.
++
++These are real network integration tests with headless clients, not a graphical
++Minecraft client play-through. UI rendering/input, AE2, third-party claims,
++and other server platforms were not tested. See the
++[backend guide](fabric-server-backend.md) for reproduction and limitations.
+diff --git a/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/BackendProtocolProbe.java b/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/BackendProtocolProbe.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/BackendProtocolProbe.java
+@@ -0,0 +1,464 @@
++package nl.requios.effortlessbuilding.test;
++
++import io.netty.buffer.Unpooled;
++import io.netty.channel.Channel;
++import net.minecraft.SharedConstants;
++import net.minecraft.client.multiplayer.RegistryDataCollector;
++import net.minecraft.core.Registry;
++import net.minecraft.core.RegistryAccess;
++import net.minecraft.core.registries.BuiltInRegistries;
++import net.minecraft.core.registries.Registries;
++import net.minecraft.network.*;
++import net.minecraft.network.chat.Component;
++import net.minecraft.network.protocol.Packet;
++import net.minecraft.network.protocol.PacketFlow;
++import net.minecraft.network.protocol.common.*;
++import net.minecraft.network.protocol.common.custom.BrandPayload;
++import net.minecraft.network.protocol.configuration.*;
++import net.minecraft.network.protocol.cookie.*;
++import net.minecraft.network.protocol.game.*;
++import net.minecraft.network.protocol.login.*;
++import net.minecraft.resources.Identifier;
++import net.minecraft.resources.ResourceKey;
++import net.minecraft.server.Bootstrap;
++import net.minecraft.server.level.ClientInformation;
++import net.minecraft.server.network.EventLoopGroupHolder;
++import net.minecraft.server.packs.resources.ResourceProvider;
++import net.minecraft.world.flag.FeatureFlags;
++import net.minecraft.world.inventory.MenuType;
++import net.minecraft.world.item.Item;
++import net.minecraft.core.BlockPos;
++import net.minecraft.core.Direction;
++import net.minecraft.world.phys.Vec3;
++import nl.requios.effortlessbuilding.buildmode.BuildModeEnum;
++import nl.requios.effortlessbuilding.buildmode.BuildSettings;
++import nl.requios.effortlessbuilding.buildmode.ModeOptions.ActionEnum;
++import nl.requios.effortlessbuilding.network.*;
++
++import java.lang.reflect.*;
++import java.net.InetSocketAddress;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Path;
++import java.nio.file.Files;
++import java.util.*;
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.function.Consumer;
++
++/** Real TCP connections, decoded by Mojang's vanilla codecs; no Fabric loader is launched. */
++public final class BackendProtocolProbe {
++    private final boolean modded;
++    private final RegistryDataCollector collector = new RegistryDataCollector();
++    private final Set<String> payloads = ConcurrentHashMap.newKeySet();
++    private volatile Throwable failure;
++    private volatile boolean joined;
++    private volatile boolean finished;
++    private volatile int packets;
++    private volatile boolean receivedTool;
++    private volatile int randomizerMenu;
++    private volatile int vanillaChest;
++    private volatile boolean chestToolHidden;
++    private boolean chestRequested;
++    private boolean chestClicked;
++    private volatile int craftingMenu;
++    private volatile List<net.minecraft.world.item.ItemStack> craftingContents;
++    private boolean craftingRequested;
++    private boolean craftingClicked;
++    private Connection connection;
++    private RegistryAccess.Frozen registries;
++    private ProtocolInfo<ServerGamePacketListener> outbound;
++
++    private BackendProtocolProbe(boolean modded) { this.modded = modded; }
++
++    public static void main(String[] args) throws Exception {
++        String mode = args.length == 0 ? "vanilla" : args[0];
++        if (mode.equals("stop")) {
++            try (ProbeRcon rcon = new ProbeRcon()) { System.out.println(rcon.command("stop")); }
++            return;
++        }
++        Process vanilla = null;
++        if (mode.equals("mixed")) {
++            Files.deleteIfExists(Path.of("vanilla-chest-go"));
++            Files.deleteIfExists(Path.of("vanilla-chest-done"));
++            Files.deleteIfExists(Path.of("vanilla-craft-go"));
++            Files.deleteIfExists(Path.of("vanilla-craft-done"));
++            vanilla = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
++                    "-cp", System.getProperty("java.class.path"), BackendProtocolProbe.class.getName(), "vanilla")
++                    .inheritIO().start();
++        }
++        SharedConstants.tryDetectVersion();
++        Bootstrap.bootStrap();
++        boolean modded = !mode.equals("vanilla");
++        if (modded) {
++            reopen(BuiltInRegistries.ITEM);
++            reopen(BuiltInRegistries.MENU);
++            // Emulate the companion's local registries, while the vanilla child has no custom entries.
++            Identifier id = Identifier.fromNamespaceAndPath("effortlessbuilding", "randomizer_tool");
++            Registry.register(BuiltInRegistries.ITEM, id, new Item(new Item.Properties()
++                    .setId(ResourceKey.create(Registries.ITEM, id)).stacksTo(1)));
++            MenuType<?> menu = Registry.register(BuiltInRegistries.MENU, Identifier.parse("effortlessbuilding:randomizer"),
++                    new MenuType<>((container, inventory) -> null, FeatureFlags.VANILLA_SET));
++            Method bindValue = net.minecraft.core.Holder.Reference.class.getDeclaredMethod("bindValue", Object.class);
++            bindValue.setAccessible(true);
++            bindValue.invoke(BuiltInRegistries.MENU.get(Identifier.parse("effortlessbuilding:randomizer")).orElseThrow(), menu);
++            Field frozen = net.minecraft.core.MappedRegistry.class.getDeclaredField("frozen");
++            frozen.setAccessible(true);
++            frozen.set(BuiltInRegistries.ITEM, true);
++            frozen.set(BuiltInRegistries.MENU, true);
++        }
++
++        BackendProtocolProbe probe = new BackendProtocolProbe(modded);
++        try {
++            probe.run();
++            if (vanilla != null && vanilla.waitFor() != 0) throw new AssertionError("Vanilla connection probe failed");
++        } catch (Throwable failure) {
++            failure.printStackTrace();
++            if (vanilla != null) vanilla.destroy();
++            System.exit(1);
++        }
++        System.exit(0);
++    }
++
++    private static void reopen(Registry<?> registry) throws Exception {
++        // A real Fabric client registers during bootstrap. This loader-free probe appends the
++        // same two entries after vanilla bootstrap; the separate vanilla process stays untouched.
++        Field frozen = net.minecraft.core.MappedRegistry.class.getDeclaredField("frozen");
++        frozen.setAccessible(true);
++        frozen.set(registry, false);
++        Field intrusive = net.minecraft.core.MappedRegistry.class.getDeclaredField("unregisteredIntrusiveHolders");
++        intrusive.setAccessible(true);
++        if (registry == BuiltInRegistries.ITEM) intrusive.set(registry, new IdentityHashMap<>());
++    }
++
++    private void run() throws Exception {
++        connection = Connection.connectToServer(new InetSocketAddress("127.0.0.1", 25576), EventLoopGroupHolder.remote(false), null);
++        Field channelField = Connection.class.getDeclaredField("channel");
++        channelField.setAccessible(true);
++        for (int wait = 0; channelField.get(connection) == null && wait < 500; wait++) Thread.sleep(10);
++        ((Channel) channelField.get(connection)).pipeline().addBefore("packet_handler", "probe_errors",
++                new io.netty.channel.ChannelInboundHandlerAdapter() {
++                    @Override public void exceptionCaught(io.netty.channel.ChannelHandlerContext ctx, Throwable cause) {
++                        cause.printStackTrace();
++                        ctx.fireExceptionCaught(cause);
++                    }
++                });
++        connection.initiateServerboundPlayConnection("127.0.0.1", 25576,
++                listener(ClientLoginPacketListener.class, ConnectionProtocol.LOGIN));
++        String name = modded ? "BackendModded" : "BackendVanilla";
++        connection.send(new ServerboundHelloPacket(name, UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8))));
++        await(() -> joined, 30_000, "join");
++        if (modded) {
++            try (ProbeRcon rcon = new ProbeRcon()) {
++                rcon.command("gamemode creative BackendModded");
++                rcon.command("tp BackendModded 0.5 -60 0.5");
++                rcon.command("setblock 1 -59 8 air");
++                rcon.command("item replace entity BackendModded weapon.mainhand with stone 64");
++                place(BuildModeEnum.SINGLE, new BlockPos(1, -59, 8), new BlockPos(1, -59, 8), null);
++                pause();
++                expect(rcon, "execute if block 1 -59 8 air run say EB_UNNEGOTIATED_DENIED", "EB_UNNEGOTIATED_DENIED");
++            }
++            custom("minecraft:register", buf -> buf.writeBytes(("effortlessbuilding:backend_hello\0"
++                    + "effortlessbuilding:sync_modifiers\0effortlessbuilding:sync_server_config\0"
++                    + "effortlessbuilding:sync_ae2_count").getBytes(StandardCharsets.UTF_8)));
++            custom("effortlessbuilding:backend_hello", buf -> buf.writeVarInt(1));
++            await(() -> payloads.contains("effortlessbuilding:sync_server_config")
++                    && payloads.contains("effortlessbuilding:sync_modifiers"), 10_000, "backend synchronization");
++            gameplay();
++        }
++        long until = System.currentTimeMillis() + Long.getLong("probe.duration", modded ? 5000L : 30_000L);
++        while (System.currentTimeMillis() < until) {
++            tick();
++            check();
++            if (!modded) vanillaActions();
++            Thread.sleep(25);
++        }
++        finished = true;
++        connection.disconnect(Component.literal("Probe complete"));
++        System.out.println("PROBE PASS " + name + ": " + packets + " vanilla-decoded packets, payloads=" + payloads);
++    }
++
++    private void gameplay() throws Exception {
++        try (ProbeRcon rcon = new ProbeRcon()) {
++            rcon.command("gamemode creative BackendModded");
++            rcon.command("gamemode creative BackendVanilla");
++            rcon.command("fill -10 -61 -10 15 -61 15 stone");
++            rcon.command("tp BackendModded 0.5 -60 0.5");
++            rcon.command("tp BackendVanilla 3.5 -60 0.5");
++            rcon.command("fill 1 -59 1 8 -59 8 air");
++            rcon.command("item replace entity BackendModded weapon.mainhand with stone 64");
++            custom("effortlessbuilding:update_modifiers", buf -> buf.writeUtf("[]"));
++            pause();
++            place(BuildModeEnum.LINE, new BlockPos(1, -59, 1), new BlockPos(3, -59, 1), null);
++            pause();
++            expect(rcon, "execute if block 1 -59 1 stone if block 2 -59 1 stone if block 3 -59 1 stone run say EB_PLACE_OK", "EB_PLACE_OK");
++            custom("effortlessbuilding:undo", buf -> {}); pause();
++            expect(rcon, "execute if block 1 -59 1 air if block 2 -59 1 air if block 3 -59 1 air run say EB_UNDO_OK", "EB_UNDO_OK");
++            custom("effortlessbuilding:redo", buf -> {}); pause();
++            expect(rcon, "execute if block 1 -59 1 stone if block 3 -59 1 stone run say EB_REDO_OK", "EB_REDO_OK");
++            custom("effortlessbuilding:break_build_mode", buf -> BreakBuildModePacket.STREAM_CODEC.encode(buf,
++                    new BreakBuildModePacket(BuildModeEnum.LINE, new BlockPos(1, -59, 1), new BlockPos(3, -59, 1), null,
++                            ActionEnum.FULL, ActionEnum.CUBE_FULL, ActionEnum.SHORT_EDGE, ActionEnum.CIRCLE_START_CORNER, true)));
++            pause();
++            expect(rcon, "execute if block 1 -59 1 air if block 3 -59 1 air run say EB_BREAK_OK", "EB_BREAK_OK");
++
++            custom("effortlessbuilding:update_modifiers", buf -> buf.writeUtf("[{\"type\":\"array\",\"count\":2,\"offsetX\":2,\"offsetY\":0,\"offsetZ\":0}]"));
++            pause();
++            place(BuildModeEnum.SINGLE, new BlockPos(1, -59, 2), new BlockPos(1, -59, 2), null);
++            pause();
++            expect(rcon, "execute if block 1 -59 2 stone if block 3 -59 2 stone if block 5 -59 2 stone run say EB_ARRAY_OK", "EB_ARRAY_OK");
++            custom("effortlessbuilding:update_modifiers", buf -> buf.writeUtf("[]"));
++            rcon.command("gamemode spectator BackendModded");
++            pause();
++            place(BuildModeEnum.SINGLE, new BlockPos(1, -59, 3), new BlockPos(1, -59, 3), null);
++            pause();
++            expect(rcon, "execute if block 1 -59 3 air run say EB_SPECTATOR_DENIED", "EB_SPECTATOR_DENIED");
++            rcon.command("gamemode creative BackendModded");
++            rcon.command("item replace entity BackendModded weapon.mainhand with effortlessbuilding:randomizer_tool[minecraft:custom_data={RandomizerBlocks:['minecraft:stone'],RandomizerRatios:[I;1,0,0,0,0,0,0,0,0]}]");
++            await(() -> receivedTool, 5000, "real randomizer item");
++            connection.send(new ServerboundPlayerInputPacket(new net.minecraft.world.entity.player.Input(false, false, false, false, false, true, false)));
++            connection.send(new ServerboundUseItemPacket(net.minecraft.world.InteractionHand.MAIN_HAND, 1, 0, 0));
++            await(() -> randomizerMenu > 0, 5000, "randomizer editor");
++            connection.send(new ServerboundContainerButtonClickPacket(randomizerMenu, 0));
++            pause();
++            expect(rcon, "execute if items entity BackendModded weapon.mainhand effortlessbuilding:randomizer_tool[minecraft:custom_data~{RandomizerRatios:[I;2,0,0,0,0,0,0,0,0]}] run say EB_MENU_SAVED", "EB_MENU_SAVED");
++            connection.send(new ServerboundContainerClosePacket(randomizerMenu));
++            connection.send(new ServerboundPlayerInputPacket(net.minecraft.world.entity.player.Input.EMPTY));
++            place(BuildModeEnum.SINGLE, new BlockPos(1, -59, 4), new BlockPos(1, -59, 4), null); pause();
++            expect(rcon, "execute if block 1 -59 4 stone run say EB_RANDOMIZER_OK", "EB_RANDOMIZER_OK");
++            // The observer decodes equipment, item entities and nested chest contents with vanilla registries.
++            rcon.command("summon item 3.5 -60 0.5 {Item:{id:'effortlessbuilding:randomizer_tool',count:1},PickupDelay:0}");
++            rcon.command("setblock 4 -60 1 chest{Items:[{Slot:0b,id:'effortlessbuilding:randomizer_tool',count:1},{Slot:1b,id:'minecraft:stone',count:1}]}");
++            Files.writeString(Path.of("vanilla-chest-go"), "go");
++            await(() -> Files.exists(Path.of("vanilla-chest-done")), 5000, "vanilla chest interaction");
++            rcon.command("recipe give BackendVanilla *");
++            rcon.command("recipe give BackendModded *");
++            pause();
++            expect(rcon, "execute unless items entity BackendVanilla inventory.* effortlessbuilding:randomizer_tool unless items entity BackendVanilla hotbar.* effortlessbuilding:randomizer_tool run say EB_VANILLA_NO_TOOL", "EB_VANILLA_NO_TOOL");
++            expect(rcon, "execute if items block 4 -60 1 container.0 effortlessbuilding:randomizer_tool run say EB_CHEST_TOOL_UNTOUCHED", "EB_CHEST_TOOL_UNTOUCHED");
++            expect(rcon, "execute if items entity BackendVanilla hotbar.* minecraft:stone run say EB_VANILLA_NORMAL_INVENTORY", "EB_VANILLA_NORMAL_INVENTORY");
++
++            rcon.command("setblock 2 -60 1 crafting_table");
++            rcon.command("kill @e[type=item]");
++            prepareCrafting(rcon, "BackendModded");
++            prepareCrafting(rcon, "BackendVanilla");
++            pause();
++            Files.writeString(Path.of("vanilla-craft-go"), "go");
++            useCraftingTable();
++            await(() -> craftingMenu > 0, 5000, "modded crafting table");
++            fillCraftingGrid();
++            await(() -> craftingContents != null && !craftingContents.getFirst().isEmpty(), 5000, "modded recipe result");
++            connection.send(new ServerboundContainerClickPacket(craftingMenu, 0, (short) 0, (byte) 0,
++                    net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
++                    it.unimi.dsi.fastutil.ints.Int2ObjectMaps.emptyMap(), HashedStack.EMPTY));
++            pause();
++            expect(rcon, "execute if items entity BackendModded hotbar.* effortlessbuilding:randomizer_tool run say EB_MODDED_CRAFTING", "EB_MODDED_CRAFTING");
++            connection.send(new ServerboundContainerClosePacket(craftingMenu));
++            await(() -> Files.exists(Path.of("vanilla-craft-done")), 5000, "vanilla recipe rejection");
++            if (!Files.readString(Path.of("vanilla-craft-done")).equals("pass")) throw new AssertionError("Vanilla tool crafting was not rejected");
++            System.out.println("ASSERT PASS EB_VANILLA_CRAFTING_DENIED");
++
++            rcon.command("clear BackendModded");
++            rcon.command("gamemode survival BackendModded");
++            rcon.command("item replace entity BackendModded weapon.mainhand with stone 2");
++            place(BuildModeEnum.LINE, new BlockPos(1, -59, 5), new BlockPos(3, -59, 5), null); pause();
++            expect(rcon, "execute if block 1 -59 5 stone if block 2 -59 5 stone if block 3 -59 5 air run say EB_SURVIVAL_INVENTORY_LIMIT", "EB_SURVIVAL_INVENTORY_LIMIT");
++            rcon.command("op BackendModded");
++            custom("effortlessbuilding:update_server_config", buf -> buf.writeUtf("{\"creativeReach\":150}"));
++            pause();
++            // Vanilla remains connected while the config is broadcast to modded sessions.
++            expect(rcon, "execute if entity BackendVanilla run say EB_CONFIG_BROADCAST_SAFE", "EB_CONFIG_BROADCAST_SAFE");
++            rcon.command("deop BackendModded");
++            System.out.println("GAMEPLAY PASS building, modifiers, undo/redo, permissions, survival, randomizer editor, crafting, vanilla isolation");
++        }
++    }
++
++    private void vanillaActions() throws Exception {
++        if (!chestRequested && Files.exists(Path.of("vanilla-chest-go"))) {
++            chestRequested = true;
++            BlockPos chest = new BlockPos(4, -60, 1);
++            connection.send(new ServerboundUseItemOnPacket(net.minecraft.world.InteractionHand.MAIN_HAND,
++                    new net.minecraft.world.phys.BlockHitResult(Vec3.atCenterOf(chest), Direction.NORTH, chest, false), 1));
++        }
++        if (!chestClicked && vanillaChest > 0 && chestToolHidden) {
++            chestClicked = true;
++            // Deliberately target the hidden slot; the server must reject it even though the UI sees air.
++            connection.send(new ServerboundContainerClickPacket(vanillaChest, 0, (short) 0, (byte) 0,
++                    net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
++                    it.unimi.dsi.fastutil.ints.Int2ObjectMaps.emptyMap(), HashedStack.EMPTY));
++            connection.send(new ServerboundContainerClickPacket(vanillaChest, 0, (short) 1, (byte) 0,
++                    net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
++                    it.unimi.dsi.fastutil.ints.Int2ObjectMaps.emptyMap(), HashedStack.EMPTY));
++            Thread.sleep(300);
++            connection.send(new ServerboundContainerClosePacket(vanillaChest));
++            Files.writeString(Path.of("vanilla-chest-done"), "done");
++        }
++        if (!craftingRequested && Files.exists(Path.of("vanilla-craft-go"))) {
++            craftingRequested = true;
++            useCraftingTable();
++        }
++        if (!craftingClicked && craftingMenu > 0) {
++            craftingClicked = true;
++            fillCraftingGrid();
++            Thread.sleep(500);
++            List<net.minecraft.world.item.ItemStack> contents = craftingContents;
++            boolean filled = contents != null && contents.size() > 9
++                    && contents.get(2).is(net.minecraft.world.item.Items.IRON_INGOT)
++                    && contents.get(4).is(net.minecraft.world.item.Items.IRON_INGOT)
++                    && contents.get(6).is(net.minecraft.world.item.Items.IRON_INGOT)
++                    && contents.get(5).is(net.minecraft.world.item.Items.POPPY)
++                    && contents.get(8).is(net.minecraft.world.item.Items.REDSTONE);
++            Files.writeString(Path.of("vanilla-craft-done"), filled && contents.getFirst().isEmpty() ? "pass" : "fail");
++            connection.send(new ServerboundContainerClosePacket(craftingMenu));
++        }
++    }
++
++    private static void prepareCrafting(ProbeRcon rcon, String player) throws Exception {
++        rcon.command("clear " + player);
++        rcon.command("tp " + player + " 3.5 -60 0.5");
++        String[] items = {"iron_ingot", "iron_ingot", "iron_ingot", "poppy", "redstone"};
++        for (int i = 0; i < items.length; i++) rcon.command("item replace entity " + player + " hotbar." + i + " with " + items[i]);
++    }
++    private void useCraftingTable() {
++        BlockPos table = new BlockPos(2, -60, 1);
++        connection.send(new ServerboundSetCarriedItemPacket(8));
++        connection.send(new ServerboundUseItemOnPacket(net.minecraft.world.InteractionHand.MAIN_HAND,
++                new net.minecraft.world.phys.BlockHitResult(Vec3.atCenterOf(table), Direction.NORTH, table, false), 2));
++    }
++    private void fillCraftingGrid() {
++        int[] slots = {2, 4, 6, 5, 8};
++        for (int i = 0; i < slots.length; i++) connection.send(new ServerboundContainerClickPacket(craftingMenu, 0,
++                (short) slots[i], (byte) i, net.minecraft.world.inventory.ContainerInput.SWAP,
++                it.unimi.dsi.fastutil.ints.Int2ObjectMaps.emptyMap(), HashedStack.EMPTY));
++    }
++
++    private void place(BuildModeEnum mode, BlockPos first, BlockPos second, BlockPos third) throws Exception {
++        custom("effortlessbuilding:place_build_mode", buf -> PlaceBuildModePacket.STREAM_CODEC.encode(buf,
++                new PlaceBuildModePacket(mode, first, second, third, Direction.UP, Vec3.atCenterOf(first),
++                        ActionEnum.FULL, ActionEnum.CUBE_FULL, ActionEnum.SHORT_EDGE, ActionEnum.CIRCLE_START_CORNER,
++                        BuildSettings.ReplaceMode.ONLY_AIR, true)));
++    }
++    private void pause() throws Exception {
++        for (int i = 0; i < 16; i++) { tick(); check(); Thread.sleep(25); }
++    }
++    private static void expect(ProbeRcon rcon, String command, String expected) throws Exception {
++        String condition = command.substring(0, command.indexOf(" run say "));
++        String result = rcon.command(condition);
++        if (!result.startsWith("Test passed")) throw new AssertionError(condition + " -> " + result);
++        System.out.println("ASSERT PASS " + expected);
++    }
++
++    private void tick() {
++        connection.tick();
++        if (joined) connection.send(new ServerboundClientTickEndPacket());
++    }
++
++    private interface Condition { boolean get(); }
++    private void await(Condition condition, long timeout, String operation) throws Exception {
++        long until = System.currentTimeMillis() + timeout;
++        while (!condition.get() && System.currentTimeMillis() < until) {
++            tick(); check(); Thread.sleep(25);
++        }
++        if (!condition.get()) throw new AssertionError("Timed out waiting for " + operation);
++    }
++    private void check() {
++        if (failure != null) throw new AssertionError("Protocol probe failed", failure);
++        if (!connection.isConnected()) throw new AssertionError("Connection closed before probe completed");
++    }
++
++    @SuppressWarnings("unchecked")
++    private <T> T listener(Class<T> type, ConnectionProtocol protocol) {
++        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
++            if (method.getName().equals("flow")) return PacketFlow.CLIENTBOUND;
++            if (method.getName().equals("protocol")) return protocol;
++            if (method.getName().equals("isAcceptingMessages") || method.getName().equals("shouldHandleMessage")) return true;
++            if (method.getName().equals("onDisconnect")) {
++                if (!finished) failure = new AssertionError("Disconnected: " + args[0]);
++                return null;
++            }
++            if (method.isDefault()) return InvocationHandler.invokeDefault(proxy, method, args);
++            if (args != null && args.length == 1 && args[0] instanceof Packet<?> packet) {
++                try { received(packet, protocol); }
++                catch (Throwable error) { failure = error; error.printStackTrace(); }
++            }
++            return null;
++        });
++    }
++
++    private void received(Packet<?> packet, ConnectionProtocol protocol) throws Exception {
++        packets++;
++        if (packet instanceof ClientboundLoginCompressionPacket compression) connection.setupCompression(compression.getCompressionThreshold(), false);
++        else if (packet instanceof ClientboundLoginFinishedPacket) {
++            connection.setupInboundProtocol(ConfigurationProtocols.CLIENTBOUND,
++                    listener(ClientConfigurationPacketListener.class, ConnectionProtocol.CONFIGURATION));
++            connection.send(ServerboundLoginAcknowledgedPacket.INSTANCE);
++            connection.setupOutboundProtocol(ConfigurationProtocols.SERVERBOUND);
++            connection.send(new ServerboundClientInformationPacket(ClientInformation.createDefault()));
++        } else if (packet instanceof ClientboundCustomQueryPacket query) connection.send(new ServerboundCustomQueryAnswerPacket(query.transactionId(), null));
++        else if (packet instanceof ClientboundSelectKnownPacks) connection.send(new ServerboundSelectKnownPacks(List.of()));
++        else if (packet instanceof ClientboundRegistryDataPacket data) {
++            if (!modded && data.entries().stream().anyMatch(entry -> entry.id().getNamespace().equals("effortlessbuilding"))) {
++                throw new AssertionError("Vanilla received custom registry entries");
++            }
++            collector.appendContents(data.registry(), data.entries());
++        } else if (packet instanceof ClientboundUpdateTagsPacket tags && protocol == ConnectionProtocol.CONFIGURATION) collector.appendTags(tags.tags());
++        else if (packet instanceof ClientboundFinishConfigurationPacket) {
++            registries = collector.collectGameRegistries(ResourceProvider.EMPTY,
++                    RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY), false);
++            connection.setupInboundProtocol(GameProtocols.CLIENTBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(registries)),
++                    listener(ClientGamePacketListener.class, ConnectionProtocol.PLAY));
++            connection.send(ServerboundFinishConfigurationPacket.INSTANCE);
++            outbound = GameProtocols.SERVERBOUND_TEMPLATE.bind(RegistryFriendlyByteBuf.decorator(registries), new GameProtocols.Context() {
++                public boolean hasInfiniteMaterials() { return true; }
++                public boolean canUseCommandBlocks() { return true; }
++            });
++            connection.setupOutboundProtocol(outbound);
++        } else if (packet instanceof ClientboundLoginPacket) {
++            connection.send(new ServerboundPlayerLoadedPacket());
++            joined = true;
++        } else if (packet instanceof ClientboundKeepAlivePacket alive) connection.send(new ServerboundKeepAlivePacket(alive.getId()));
++        else if (packet instanceof ClientboundPingPacket ping) connection.send(new ServerboundPongPacket(ping.getId()));
++        else if (packet instanceof ClientboundPlayerPositionPacket position) connection.send(new ServerboundAcceptTeleportationPacket(position.id(), position.change().position().x, position.change().position().y, position.change().position().z, position.change().yRot(), position.change().xRot()));
++        else if (packet instanceof ClientboundCookieRequestPacket cookie) connection.send(new ServerboundCookieResponsePacket(cookie.key(), null));
++        else if (packet instanceof ClientboundCustomPayloadPacket custom) {
++            String id = custom.payload().type().id().toString();
++            payloads.add(id);
++            if (!modded && id.startsWith("effortlessbuilding:")) throw new AssertionError("Vanilla received " + id);
++        } else if (packet instanceof ClientboundContainerSetSlotPacket slot) {
++            if (BuiltInRegistries.ITEM.getKey(slot.getItem().getItem()).toString().equals("effortlessbuilding:randomizer_tool")) receivedTool = true;
++        } else if (packet instanceof ClientboundOpenScreenPacket screen) {
++            String type = BuiltInRegistries.MENU.getKey(screen.getType()).toString();
++            System.out.println("OPEN " + (modded ? "modded " : "vanilla ") + type);
++            if (type.equals("effortlessbuilding:randomizer")) {
++                if (!modded) throw new AssertionError("Vanilla received custom menu");
++                randomizerMenu = screen.getContainerId();
++            } else if (!modded && screen.getType() == MenuType.GENERIC_9x3) vanillaChest = screen.getContainerId();
++            else if (screen.getType() == MenuType.CRAFTING) craftingMenu = screen.getContainerId();
++        } else if (packet instanceof ClientboundContainerSetContentPacket contents) {
++            if (craftingMenu > 0 && contents.containerId() == craftingMenu) craftingContents = contents.items();
++            if (!modded && contents.containerId() == vanillaChest && !contents.items().isEmpty()) {
++                if (!contents.items().getFirst().isEmpty()) throw new AssertionError("Custom item leaked into vanilla chest");
++                chestToolHidden = true;
++            }
++        } else if (packet instanceof ClientboundSystemChatPacket chat && chat.overlay()) {
++            System.out.println("OVERLAY " + (modded ? "modded " : "vanilla ") + chat.content().getString());
++        } else if (packet instanceof ClientboundDisconnectPacket disconnect) throw new AssertionError(disconnect.reason().getString());
++        else if (packet instanceof ClientboundLoginDisconnectPacket disconnect) throw new AssertionError(disconnect.reason().getString());
++        else if (packet instanceof ClientboundBundlePacket bundle) {
++            for (Packet<?> child : bundle.subPackets()) received(child, protocol);
++        }
++    }
++
++    /** Bypasses only the vanilla outbound custom-payload whitelist to emulate the companion mod. */
++    private void custom(String id, Consumer<FriendlyByteBuf> writer) throws Exception {
++        FriendlyByteBuf encoded = new FriendlyByteBuf(Unpooled.buffer());
++        outbound.codec().encode(encoded, new ServerboundCustomPayloadPacket(new BrandPayload("probe")));
++        int packetId = encoded.readVarInt();
++        encoded.release();
++        FriendlyByteBuf raw = new FriendlyByteBuf(Unpooled.buffer());
++        raw.writeVarInt(packetId);
++        raw.writeIdentifier(Identifier.parse(id));
++        writer.accept(raw);
++        Field field = Connection.class.getDeclaredField("channel");
++        field.setAccessible(true);
++        ((Channel) field.get(connection)).writeAndFlush(raw);
++    }
++}
+diff --git a/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/ProbeRcon.java b/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/ProbeRcon.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/backendProbe/java/nl/requios/effortlessbuilding/test/ProbeRcon.java
+@@ -0,0 +1,35 @@
++package nl.requios.effortlessbuilding.test;
++
++import java.io.*;
++import java.net.Socket;
++import java.nio.ByteBuffer;
++import java.nio.ByteOrder;
++import java.nio.charset.StandardCharsets;
++
++/** RCON for the isolated test server only. Never uses a user's server or credentials. */
++final class ProbeRcon implements AutoCloseable {
++    private final Socket socket = new Socket("127.0.0.1", 25577);
++    private int sequence;
++    ProbeRcon() throws IOException { request(3, "backend-probe-local-only"); }
++
++    String command(String text) throws IOException { return request(2, text); }
++
++    private String request(int type, String text) throws IOException {
++        int id = ++sequence;
++        byte[] body = text.getBytes(StandardCharsets.UTF_8);
++        ByteBuffer out = ByteBuffer.allocate(body.length + 14).order(ByteOrder.LITTLE_ENDIAN);
++        out.putInt(body.length + 10).putInt(id).putInt(type).put(body).put((byte) 0).put((byte) 0);
++        socket.getOutputStream().write(out.array());
++        InputStream input = socket.getInputStream();
++        socket.setSoTimeout(5000);
++        int size = ByteBuffer.wrap(input.readNBytes(4)).order(ByteOrder.LITTLE_ENDIAN).getInt();
++        ByteBuffer result = ByteBuffer.wrap(input.readNBytes(size)).order(ByteOrder.LITTLE_ENDIAN);
++        if (result.getInt() != id) throw new IOException("RCON rejected request");
++        result.getInt();
++        byte[] response = new byte[size - 10];
++        result.get(response);
++        return new String(response, StandardCharsets.UTF_8);
++    }
++
++    @Override public void close() throws IOException { socket.close(); }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricBackend.java b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricBackend.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricBackend.java
+@@ -0,0 +1,72 @@
++package nl.requios.effortlessbuilding.backend;
++
++import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
++import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
++import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
++import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
++import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
++import net.minecraft.server.level.ServerPlayer;
++import nl.requios.effortlessbuilding.network.*;
++
++import java.util.function.BiConsumer;
++
++/** Fabric transport adapter for the shared backend. No login task or required handshake. */
++public final class FabricBackend {
++    private FabricBackend() {}
++
++    public static void initialize() {
++        PayloadTypeRegistry.serverboundPlay().register(BackendHelloPacket.TYPE, BackendHelloPacket.STREAM_CODEC);
++        PayloadTypeRegistry.clientboundPlay().register(BackendHelloPacket.TYPE, BackendHelloPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(PlaceBuildModePacket.TYPE, PlaceBuildModePacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(BreakBuildModePacket.TYPE, BreakBuildModePacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(UndoPacket.TYPE, UndoPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(RedoPacket.TYPE, RedoPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(UpdateModifiersC2SPacket.TYPE, UpdateModifiersC2SPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(UpdateServerConfigC2SPacket.TYPE, UpdateServerConfigC2SPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(QueryAE2CountC2SPacket.TYPE, QueryAE2CountC2SPacket.STREAM_CODEC);
++        PayloadTypeRegistry.serverboundPlay().register(BuildModeHintC2SPacket.TYPE, BuildModeHintC2SPacket.STREAM_CODEC);
++        PayloadTypeRegistry.clientboundPlay().register(SyncModifiersS2CPacket.TYPE, SyncModifiersS2CPacket.STREAM_CODEC);
++        PayloadTypeRegistry.clientboundPlay().register(SyncServerConfigS2CPacket.TYPE, SyncServerConfigS2CPacket.STREAM_CODEC);
++        PayloadTypeRegistry.clientboundPlay().register(SyncAE2CountS2CPacket.TYPE, SyncAE2CountS2CPacket.STREAM_CODEC);
++
++        ServerPlayNetworking.registerGlobalReceiver(BackendHelloPacket.TYPE, (packet, context) -> {
++            ServerPlayer player = context.player();
++            if (!ServerPlayNetworking.canSend(player, BackendHelloPacket.TYPE)
++                    || !ServerPlayNetworking.canSend(player, SyncModifiersS2CPacket.TYPE)
++                    || !ServerPlayNetworking.canSend(player, SyncServerConfigS2CPacket.TYPE)) return;
++            if (BackendSession.connect(player.getUUID(), packet.version())) {
++                ServerPlayNetworking.send(player, new BackendHelloPacket(BackendSession.PROTOCOL_VERSION));
++                BackendLifecycle.ready(player);
++            }
++        });
++        receive(PlaceBuildModePacket.TYPE, PacketHandler::handlePlaceBuildMode);
++        receive(BreakBuildModePacket.TYPE, PacketHandler::handleBreakBuildMode);
++        receive(UndoPacket.TYPE, (packet, player) -> PacketHandler.handleUndo(player));
++        receive(RedoPacket.TYPE, (packet, player) -> PacketHandler.handleRedo(player));
++        receive(UpdateModifiersC2SPacket.TYPE, PacketHandler::handleUpdateModifiers);
++        receive(UpdateServerConfigC2SPacket.TYPE, PacketHandler::handleUpdateServerConfig);
++        receive(QueryAE2CountC2SPacket.TYPE, PacketHandler::handleQueryAE2Count);
++        receive(BuildModeHintC2SPacket.TYPE, (packet, player) -> PacketHandler.handleBuildModeHint(player));
++
++        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> BackendLifecycle.disconnected(handler.getPlayer()));
++        ServerLifecycleEvents.SERVER_STARTED.register(BackendLifecycle::started);
++        ServerLifecycleEvents.SERVER_STOPPED.register(BackendLifecycle::stopped);
++    }
++
++    private static <T extends CustomPacketPayload> void receive(CustomPacketPayload.Type<T> type,
++                                                               BiConsumer<T, ServerPlayer> handler) {
++        // Fabric invokes play handlers on the server thread.
++        ServerPlayNetworking.registerGlobalReceiver(type, (packet, context) -> {
++            ServerPlayer player = context.player();
++            if (BackendSession.acceptRequest(player.getUUID(), context.server().getTickCount())) {
++                handler.accept(packet, player);
++            }
++        });
++    }
++
++    public static void send(ServerPlayer player, CustomPacketPayload packet) {
++        if (BackendSession.supports(player.getUUID()) && ServerPlayNetworking.canSend(player, packet.type())) {
++            ServerPlayNetworking.send(player, packet);
++        }
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricContent.java b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricContent.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricContent.java
+@@ -0,0 +1,58 @@
++package nl.requios.effortlessbuilding.backend;
++
++import eu.pb4.polymer.common.api.PolymerCommonUtils;
++import eu.pb4.polymer.core.api.item.PolymerItem;
++import eu.pb4.polymer.core.api.other.PolymerMenuUtils;
++import net.fabricmc.fabric.api.networking.v1.context.PacketContext;
++import net.minecraft.core.HolderLookup;
++import net.minecraft.world.InteractionHand;
++import net.minecraft.world.InteractionResult;
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.item.*;
++import net.minecraft.world.level.Level;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import nl.requios.effortlessbuilding.menu.ModMenus;
++
++/** Per-recipient item encoding, including nested stacks, equipment and entity metadata. */
++public final class FabricContent {
++    private FabricContent() {}
++
++    public static boolean supported(Player player) {
++        return player.level().isClientSide() || BackendSession.supports(player.getUUID());
++    }
++
++    public static Item createRandomizer(Item.Properties properties) {
++        Item item = new RandomizerToolItem(properties) {
++            @Override
++            public InteractionResult use(Level level, Player player, InteractionHand hand) {
++                return supported(player) ? super.use(level, player, hand) : InteractionResult.PASS;
++            }
++        };
++        PolymerItem.registerOverlay(item, new PolymerItem() {
++            private boolean supported(PacketContext context) {
++                Player player = PolymerCommonUtils.getPlayer(context);
++                return player != null && BackendSession.supports(player.getUUID());
++            }
++
++            @Override
++            public Item getPolymerItem(ItemStack stack, PacketContext context) {
++                return supported(context) ? item : Items.AIR;
++            }
++
++            @Override
++            public ItemStack getPolymerItemStack(ItemStack stack, TooltipFlag tooltip,
++                                                 PacketContext context, HolderLookup.Provider lookup) {
++                // No fallback item, custom data, model or tooltip is exposed to vanilla.
++                return supported(context) ? stack : ItemStack.EMPTY;
++            }
++
++            @Override
++            public boolean canSyncRawToClient(PacketContext context) { return supported(context); }
++        });
++        return item;
++    }
++
++    public static void registerMenu() {
++        PolymerMenuUtils.registerType(ModMenus.RANDOMIZER);
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricRecipeContext.java b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricRecipeContext.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/backend/FabricRecipeContext.java
+@@ -0,0 +1,12 @@
++package nl.requios.effortlessbuilding.backend;
++
++import net.minecraft.world.entity.player.Player;
++
++/** Restricts the tool recipe to an opted-in player's crafting grid, excluding automation. */
++public final class FabricRecipeContext {
++    private static final ThreadLocal<Player> PLAYER = new ThreadLocal<>();
++    private FabricRecipeContext() {}
++    public static Player get() { return PLAYER.get(); }
++    public static void set(Player player) { PLAYER.set(player); }
++    public static void clear() { PLAYER.remove(); }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContainerMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContainerMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContainerMixin.java
+@@ -0,0 +1,30 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.inventory.AbstractContainerMenu;
++import net.minecraft.world.inventory.ContainerInput;
++import nl.requios.effortlessbuilding.backend.FabricContent;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.Inject;
++import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
++
++/** Covers shift-click transfers as well as Slot subclasses overriding mayPickup. */
++@Mixin(AbstractContainerMenu.class)
++public abstract class OptionalContainerMixin {
++    @Inject(method = "clicked", at = @At("HEAD"), cancellable = true)
++    private void effortlessbuilding$guardTransfer(int slot, int button, ContainerInput input,
++                                                  Player player, CallbackInfo ci) {
++        if (FabricContent.supported(player)) return;
++        AbstractContainerMenu menu = (AbstractContainerMenu) (Object) this;
++        boolean hiddenSlot = slot >= 0 && slot < menu.slots.size()
++                && menu.slots.get(slot).getItem().getItem() instanceof RandomizerToolItem;
++        boolean hiddenSwap = input == ContainerInput.SWAP && button >= 0 && button < 9
++                && player.getInventory().getItem(button).getItem() instanceof RandomizerToolItem;
++        if (hiddenSlot || hiddenSwap || menu.getCarried().getItem() instanceof RandomizerToolItem) {
++            ci.cancel();
++            menu.sendAllDataToRemote();
++        }
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentMixin.java
+@@ -0,0 +1,22 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.world.entity.item.ItemEntity;
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.item.ItemStack;
++import nl.requios.effortlessbuilding.backend.FabricContent;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.Shadow;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.Inject;
++import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
++
++@Mixin(ItemEntity.class)
++public abstract class OptionalContentMixin {
++    @Shadow public abstract ItemStack getItem();
++
++    @Inject(method = "playerTouch", at = @At("HEAD"), cancellable = true)
++    private void effortlessbuilding$preventVanillaPickup(Player player, CallbackInfo ci) {
++        if (getItem().getItem() instanceof RandomizerToolItem && !FabricContent.supported(player)) ci.cancel();
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentSlotMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentSlotMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalContentSlotMixin.java
+@@ -0,0 +1,22 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.inventory.Slot;
++import net.minecraft.world.item.ItemStack;
++import nl.requios.effortlessbuilding.backend.FabricContent;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.Shadow;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.Inject;
++import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
++
++@Mixin(Slot.class)
++public abstract class OptionalContentSlotMixin {
++    @Shadow public abstract ItemStack getItem();
++
++    @Inject(method = "mayPickup", at = @At("HEAD"), cancellable = true)
++    private void effortlessbuilding$preventVanillaTransfer(Player player, CallbackInfoReturnable<Boolean> cir) {
++        if (getItem().getItem() instanceof RandomizerToolItem && !FabricContent.supported(player)) cir.setReturnValue(false);
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalCraftingMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalCraftingMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalCraftingMixin.java
+@@ -0,0 +1,26 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
++import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
++import net.minecraft.server.level.ServerLevel;
++import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.inventory.*;
++import net.minecraft.world.item.crafting.CraftingRecipe;
++import net.minecraft.world.item.crafting.RecipeHolder;
++import nl.requios.effortlessbuilding.backend.FabricRecipeContext;
++import org.spongepowered.asm.mixin.Mixin;
++
++@Mixin(CraftingMenu.class)
++public abstract class OptionalCraftingMixin {
++    @WrapMethod(method = "slotChangedCraftingGrid")
++    private static void effortlessbuilding$recipeOwner(AbstractContainerMenu menu, ServerLevel level,
++            Player player, CraftingContainer input, ResultContainer output,
++            RecipeHolder<CraftingRecipe> hint, Operation<Void> original) {
++        FabricRecipeContext.set(player);
++        try {
++            original.call(menu, level, player, input, output, hint);
++        } finally {
++            FabricRecipeContext.clear();
++        }
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeMixin.java
+@@ -0,0 +1,29 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.world.item.ItemStackTemplate;
++import net.minecraft.world.item.crafting.CraftingInput;
++import net.minecraft.world.item.crafting.ShapedRecipe;
++import net.minecraft.world.level.Level;
++import nl.requios.effortlessbuilding.backend.FabricContent;
++import nl.requios.effortlessbuilding.backend.FabricRecipeContext;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import org.spongepowered.asm.mixin.Final;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.Shadow;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.Inject;
++import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
++
++@Mixin(ShapedRecipe.class)
++public abstract class OptionalRecipeMixin {
++    @Shadow @Final private ItemStackTemplate result;
++
++    @Inject(method = "matches(Lnet/minecraft/world/item/crafting/CraftingInput;Lnet/minecraft/world/level/Level;)Z",
++            at = @At("HEAD"), cancellable = true)
++    private void effortlessbuilding$onlyModdedCrafting(CraftingInput input, Level level,
++                                                       CallbackInfoReturnable<Boolean> cir) {
++        if (level.isClientSide() || !(result.item().value() instanceof RandomizerToolItem)) return;
++        var player = FabricRecipeContext.get();
++        if (player == null || !FabricContent.supported(player)) cir.setReturnValue(false);
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeSyncMixin.java b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeSyncMixin.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/mixin/OptionalRecipeSyncMixin.java
+@@ -0,0 +1,28 @@
++package nl.requios.effortlessbuilding.mixin;
++
++import net.minecraft.network.protocol.Packet;
++import net.minecraft.network.protocol.game.ClientboundRecipeBookAddPacket;
++import net.minecraft.server.network.ServerCommonPacketListenerImpl;
++import net.minecraft.server.network.ServerGamePacketListenerImpl;
++import net.minecraft.world.item.crafting.display.SlotDisplay;
++import nl.requios.effortlessbuilding.backend.BackendSession;
++import nl.requios.effortlessbuilding.item.RandomizerToolItem;
++import org.spongepowered.asm.mixin.Mixin;
++import org.spongepowered.asm.mixin.injection.At;
++import org.spongepowered.asm.mixin.injection.ModifyVariable;
++
++@Mixin(ServerCommonPacketListenerImpl.class)
++public abstract class OptionalRecipeSyncMixin {
++    @ModifyVariable(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V",
++            at = @At("HEAD"), argsOnly = true)
++    private Packet<?> effortlessbuilding$filterRecipeBook(Packet<?> packet) {
++        if ((Object) this instanceof ServerGamePacketListenerImpl handler
++                && !BackendSession.supports(handler.player.getUUID())
++                && packet instanceof ClientboundRecipeBookAddPacket recipes) {
++            return new ClientboundRecipeBookAddPacket(recipes.entries().stream().filter(entry ->
++                    !(entry.contents().display().result() instanceof SlotDisplay.ItemStackSlotDisplay display
++                            && display.stack().item().value() instanceof RandomizerToolItem)).toList(), recipes.replace());
++        }
++        return packet;
++    }
++}
+diff --git a/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricClientNetwork.java b/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricClientNetwork.java
+new file mode 100644
+--- /dev/null
++++ b/fabric/src/main/java/nl/requios/effortlessbuilding/platform/FabricClientNetwork.java
+@@ -0,0 +1,22 @@
++package nl.requios.effortlessbuilding.platform;
++
++import net.fabricmc.api.EnvType;
++import net.fabricmc.api.Environment;
++import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
++import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
++import nl.requios.effortlessbuilding.network.PlaceBuildModePacket;
++
++/** Kept separate so the dedicated server never resolves Fabric's client networking API. */
++@Environment(EnvType.CLIENT)
++public final class FabricClientNetwork {
++    public static boolean ready;
++    private FabricClientNetwork() {}
++
++    public static boolean available() {
++        return ready && ClientPlayNetworking.canSend(PlaceBuildModePacket.TYPE);
++    }
++
++    public static void send(CustomPacketPayload packet) {
++        if (ready && ClientPlayNetworking.canSend(packet.type())) ClientPlayNetworking.send(packet);
++    }
++}

@@ -1,0 +1,567 @@
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java b/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
+index a8dd653..a5f12e6 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/AllIcons.java
+@@ -1,7 +1,5 @@
+ package nl.requios.effortlessbuilding;
+ 
+-import net.minecraft.client.gui.GuiGraphicsExtractor;
+-import net.minecraft.client.renderer.RenderPipelines;
+ import net.minecraft.resources.Identifier;
+ 
+ public class AllIcons {
+@@ -94,8 +92,6 @@ public class AllIcons {
+         // No-op in 1.21.11 — texture binding is handled by the render pipeline
+     }
+ 
+-    public void render(GuiGraphicsExtractor graphics, int x, int y) {
+-        graphics.blit(RenderPipelines.GUI_TEXTURED, ICON_ATLAS, x, y, (float) iconX, (float) iconY, 16, 16, 256, 256);
+-    }
+-
++    public int getIconX() { return iconX; }
++    public int getIconY() { return iconY; }
+ }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
+index e5667bc..674f11b 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/BuildSettings.java
+@@ -1,6 +1,5 @@
+ package nl.requios.effortlessbuilding.buildmode;
+ 
+-import net.minecraft.client.Minecraft;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.world.item.ItemStack;
+ import net.minecraft.world.level.Level;
+@@ -41,10 +40,9 @@ public class BuildSettings {
+     }
+ 
+     /**
+-     * Returns the effective replace mode. Falls back to ONLY_AIR if there is no local player.
++     * Returns the selected replace mode without accessing client-only Minecraft classes.
+      */
+     public ReplaceMode getReplaceMode() {
+-        if (!canReplace()) return ReplaceMode.ONLY_AIR;
+         return replaceMode;
+     }
+ 
+@@ -106,12 +104,4 @@ public class BuildSettings {
+     // Private helpers
+     // -------------------------------------------------------------------------
+ 
+-    private boolean canReplace() {
+-        Minecraft mc = Minecraft.getInstance();
+-        return mc.player != null;
+-    }
+ }
+-
+-
+-
+-
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
+index f11c869..37e63a8 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/ModeOptions.java
+@@ -9,6 +9,9 @@ import nl.requios.effortlessbuilding.network.RedoPacket;
+ 
+ public class ModeOptions {
+ 
++    private record Calculation(ActionEnum fill, ActionEnum cubeFill, ActionEnum raisedEdge, ActionEnum circleStart) {}
++    private static final ThreadLocal<Calculation> CALCULATION = new ThreadLocal<>();
++
+ 	private static ActionEnum buildSpeed = ActionEnum.NORMAL_SPEED;
+ 	private static ActionEnum fill = ActionEnum.FULL;
+ 	private static ActionEnum cubeFill = ActionEnum.CUBE_FULL;
+@@ -40,14 +43,17 @@ public class ModeOptions {
+ 	}
+ 
+ 	public static ActionEnum getFill() {
++		if (CALCULATION.get() != null) return CALCULATION.get().fill();
+ 		return fill;
+ 	}
+ 
+ 	public static ActionEnum getCubeFill() {
++		if (CALCULATION.get() != null) return CALCULATION.get().cubeFill();
+ 		return cubeFill;
+ 	}
+ 
+ 	public static ActionEnum getRaisedEdge() {
++		if (CALCULATION.get() != null) return CALCULATION.get().raisedEdge();
+ 		return raisedEdge;
+ 	}
+ 
+@@ -56,17 +62,17 @@ public class ModeOptions {
+ 	}
+ 
+ 	public static ActionEnum getCircleStart() {
++		if (CALCULATION.get() != null) return CALCULATION.get().circleStart();
+ 		return circleStart;
+ 	}
+ 
+ 	// Called server-side before recalculating block positions from a packet.
+ 	public static void applyForCalculation(ActionEnum fill, ActionEnum cubeFill, ActionEnum raisedEdge, ActionEnum circleStart) {
+-		ModeOptions.fill = fill;
+-		ModeOptions.cubeFill = cubeFill;
+-		ModeOptions.raisedEdge = raisedEdge;
+-		ModeOptions.circleStart = circleStart;
++		CALCULATION.set(new Calculation(fill, cubeFill, raisedEdge, circleStart));
+ 	}
+ 
++	public static void clearCalculation() { CALCULATION.remove(); }
++
+ 	public static void performAction(Player player, ActionEnum action) {
+ 		if (action == null) return;
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
+index d04086e..6ea5b63 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Circle.java
+@@ -12,7 +12,7 @@ import java.util.List;
+ public class Circle extends TwoClicksBuildMode {
+ 
+ 	public static List<BlockPos> getCircleBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		float centerX = x1;
+ 		float centerZ = z1;
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
+index 82cb9b1..4d004ee 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cube.java
+@@ -11,7 +11,7 @@ import java.util.List;
+ public class Cube extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getFloorBlocksUsingCubeFill(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (ModeOptions.getCubeFill() == ModeOptions.ActionEnum.CUBE_SKELETON)
+ 			Floor.addHollowFloorBlocks(list, x1, x2, y1, z1, z2);
+@@ -22,7 +22,7 @@ public class Cube extends ThreeClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getCubeBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		switch (ModeOptions.getCubeFill()) {
+ 			case CUBE_FULL:
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
+index 8547777..671cd83 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Cylinder.java
+@@ -10,7 +10,7 @@ import java.util.List;
+ public class Cylinder extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getCylinderBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		//Get circle blocks (using CIRCLE_START and FILL options built-in)
+ 		List<BlockPos> circleBlocks = Circle.getCircleBlocks(player, x1, y1, z1, x2, y2, z2);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
+index c35b523..d0d0186 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalLine.java
+@@ -12,7 +12,7 @@ public class DiagonalLine extends ThreeClicksBuildMode {
+ 
+ 	//Add diagonal line from first to second
+ 	public static List<BlockPos> getDiagonalLineBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, float sampleMultiplier) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		Vec3 first = new Vec3(x1, y1, z1).add(0.5, 0.5, 0.5);
+ 		Vec3 second = new Vec3(x2, y2, z2).add(0.5, 0.5, 0.5);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
+index 146ca3d..bee4c0a 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/DiagonalWall.java
+@@ -11,7 +11,7 @@ public class DiagonalWall extends ThreeClicksBuildMode {
+ 
+ 	//Add diagonal wall from first to second
+ 	public static List<BlockPos> getDiagonalWallBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		//Get diagonal line blocks
+ 		List<BlockPos> diagonalLineBlocks = DiagonalLine.getDiagonalLineBlocks(player, x1, y1, z1, x2, y2, z2, 1);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
+index a1cdf6f..334abe6 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Floor.java
+@@ -38,7 +38,7 @@ public class Floor extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getFloorBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (ModeOptions.getFill() == ModeOptions.ActionEnum.FULL)
+ 			addFloorBlocks(list, x1, x2, y1, z1, z2);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
+index ac22bdf..f2071a4 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Line.java
+@@ -63,7 +63,7 @@ public class Line extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getLineBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (x1 != x2) {
+ 			addXLineBlocks(list, x1, x2, y1, z1);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
+index 8451ca3..3ee14db 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/SlopeFloor.java
+@@ -14,7 +14,7 @@ public class SlopeFloor extends ThreeClicksBuildMode {
+ 
+ 	//Add slope floor from first to second
+ 	public static List<BlockPos> getSlopeFloorBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		int axisLimit = ServerConfig.INSTANCE.getMaxBlocksPerAxis(player);
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
+index 1150c94..d2c46ac 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Sphere.java
+@@ -12,7 +12,7 @@ import java.util.List;
+ public class Sphere extends ThreeClicksBuildMode {
+ 
+ 	public static List<BlockPos> getSphereBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2, int x3, int y3, int z3) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		float centerX = x1;
+ 		float centerY = y1;
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
+index ef58848..82b1358 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildmode/buildmodes/Wall.java
+@@ -53,7 +53,7 @@ public class Wall extends TwoClicksBuildMode {
+ 	}
+ 
+ 	public static List<BlockPos> getWallBlocks(Player player, int x1, int y1, int z1, int x2, int y2, int z2) {
+-		List<BlockPos> list = new ArrayList<>();
++		List<BlockPos> list = nl.requios.effortlessbuilding.backend.BuildBudget.positions();
+ 
+ 		if (x1 == x2) {
+ 			if (ModeOptions.getFill() == ModeOptions.ActionEnum.FULL)
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
+index bc5059e..b682003 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java
+@@ -53,6 +53,7 @@ public class BuildModeSystem implements IBuildSystem {
+     /** Clears the context after pipeline execution. */
+     public static void clearContext() {
+         CONTEXT.remove();
++        ModeOptions.clearCalculation();
+     }
+ 
+     @Override
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
+index 9ae43a0..b81eb86 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
+@@ -1,5 +1,7 @@
+ package nl.requios.effortlessbuilding.buildpipeline;
+ 
++import nl.requios.effortlessbuilding.backend.BuildBudget;
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.component.DataComponents;
+ import net.minecraft.world.entity.player.Player;
+@@ -141,6 +143,14 @@ public class BuildPipeline {
+                                                 ModeOptions.ActionEnum fill, ModeOptions.ActionEnum cubeFill,
+                                                 ModeOptions.ActionEnum raisedEdge, ModeOptions.ActionEnum circleStart,
+                                                 boolean protectTileEntities) {
++        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
++                && (!BackendRules.canBuild(serverPlayer)
++                || !BackendRules.validAnchor(serverPlayer, firstPos))) return null;
++        if (!BuildBudget.acceptsBounds(firstPos, secondPos, thirdPos)) {
++            player.sendOverlayMessage(net.minecraft.network.chat.Component.literal("Build bounds are too large to calculate safely."));
++            return null;
++        }
++        BuildBudget.begin();
+         BuildModeSystem.setContext(new BuildModeSystem.Context(
+                 mode, firstPos, secondPos, thirdPos, fill, cubeFill, raisedEdge, circleStart));
+         ConstraintSystem.setPlacementContext(new ConstraintSystem.PlacementContext(protectTileEntities));
+@@ -149,7 +159,11 @@ public class BuildPipeline {
+             processBlocks(blockSet, player, action);
+             if (blockSet.isEmpty()) return null;
+             return blockSet;
++        } catch (BuildBudget.Exceeded ignored) {
++            player.sendOverlayMessage(net.minecraft.network.chat.Component.literal("Build is too large to calculate safely."));
++            return null;
+         } finally {
++            BuildBudget.end();
+             BuildModeSystem.clearContext();
+             ConstraintSystem.clearPlacementContext();
+         }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
+index 7a887a3..ea33e59 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.buildpipeline;
+ 
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.level.Level;
+@@ -61,6 +62,9 @@ public class ConstraintSystem implements IBuildSystem {
+             BlockPos pos = mapEntry.getKey();
+             if (level.isOutsideBuildHeight(pos) || !worldBorder.isWithinBounds(pos)) {
+                 entry.markRejected(BlockStatus.WORLD_BORDER);
++            } else if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer
++                    && !BackendRules.canChange(serverPlayer, serverPlayer.level(), pos)) {
++                entry.markRejected(BlockStatus.PROTECTED_POSITION);
+             }
+         }
+ 
+@@ -76,7 +80,7 @@ public class ConstraintSystem implements IBuildSystem {
+         }
+ 
+         // Protected tile entities — applies to ALL players (including creative)
+-        boolean protectTiles = getProtectTileEntities();
++        boolean protectTiles = getProtectTileEntities(level.isClientSide());
+         if (protectTiles) {
+             for (var mapEntry : blocks.entrySet()) {
+                 BlockEntry entry = mapEntry.getValue();
+@@ -117,6 +121,11 @@ public class ConstraintSystem implements IBuildSystem {
+ 
+ 
+             // Only placed blocks check
++            if (state.getDestroySpeed(level, pos) < 0) {
++                entry.markRejected(BlockStatus.TOO_HARD);
++                continue;
++            }
++
+             if (ServerConfig.INSTANCE.survivalOnlyPlacedBlocks
+                     && !PlacedBlockTracker.isTrackedAnySide(player, level, pos)) {
+                 entry.markRejected(BlockStatus.NOT_PLACED_BY_PLAYER);
+@@ -145,11 +154,12 @@ public class ConstraintSystem implements IBuildSystem {
+      * Gets the protectTileEntities setting. Server reads from ThreadLocal context,
+      * client reads from ClientConfig.
+      */
+-    private boolean getProtectTileEntities() {
++    private boolean getProtectTileEntities(boolean clientSide) {
+         PlacementContext ctx = PLACEMENT_CTX.get();
+         if (ctx != null) {
+             return ctx.protectTileEntities();
+         }
++        if (!clientSide) return true;
+         // Client-side: read from ClientConfig
+         try {
+             return nl.requios.effortlessbuilding.config.ClientConfig.INSTANCE.shouldProtectTileEntities();
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
+index 1bfac94..a305a37 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
+@@ -69,6 +69,9 @@ public class RandomizerMenu extends AbstractContainerMenu {
+ 
+     @Override
+     public void clicked(int slotId, int button, ContainerInput clickType, Player player) {
++        // The editor may not move the stack whose configuration it is editing.
++        int toolSlot = player.getInventory().getSelectedSlot();
++        if (slotId == PLAYER_MAIN_END + toolSlot || clickType == ContainerInput.SWAP && button == toolSlot) return;
+         if (slotId >= 0 && slotId < GHOST_SLOT_END) {
+             ItemStack source = clickType == ContainerInput.SWAP && button >= 0 && button < 9
+                     ? player.getInventory().getItem(button)
+@@ -172,7 +175,7 @@ public class RandomizerMenu extends AbstractContainerMenu {
+ 
+     @Override
+     public boolean stillValid(Player player) {
+-        return player.isAlive();
++        return player.isAlive() && player.getMainHandItem() == tool;
+     }
+ 
+     private static final class GhostSlot extends Slot {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
+index ad9d3e1..5bd675d 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
+@@ -7,7 +7,6 @@ import net.minecraft.world.entity.player.Player;
+ import net.minecraft.world.item.BlockItem;
+ import net.minecraft.world.item.context.BlockPlaceContext;
+ import net.minecraft.world.level.Level;
+-import nl.requios.effortlessbuilding.buildpipeline.BuildPipelineClient;
+ import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
+ import org.spongepowered.asm.mixin.Mixin;
+ import org.spongepowered.asm.mixin.injection.At;
+@@ -19,15 +18,6 @@ import java.util.List;
+ @Mixin(BlockItem.class)
+ public class MixinBlockItem {
+ 
+-    // Safety net: cancel vanilla block placement whenever the build pipeline should intercept.
+-    @Inject(method = "place(Lnet/minecraft/world/item/context/BlockPlaceContext;)Lnet/minecraft/world/InteractionResult;", at = @At("HEAD"), cancellable = true)
+-    private void onPlace(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
+-        if (!context.getLevel().isClientSide()) return;
+-        if (!BuildPipelineClient.shouldInterceptPlacing()) return;
+-        cir.setReturnValue(InteractionResult.SUCCESS);
+-        cir.cancel();
+-    }
+-
+     // Track vanilla single-block placements so survival players can break them with build-mode breaking.
+     @Inject(method = "place(Lnet/minecraft/world/item/context/BlockPlaceContext;)Lnet/minecraft/world/InteractionResult;", at = @At("TAIL"))
+     private void effortlessbuilding$trackPlacement(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java b/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
+index f0eb7da..8e84a49 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/modifier/ModifierSerializer.java
+@@ -65,6 +65,7 @@ public class ModifierSerializer {
+         try {
+             JsonArray array = JsonParser.parseString(json).getAsJsonArray();
+             for (JsonElement element : array) {
++                if (result.size() >= 32) break;
+                 JsonObject obj = element.getAsJsonObject();
+                 IModifier modifier = deserializeModifier(obj);
+                 if (modifier == null) continue;
+@@ -125,7 +126,8 @@ public class ModifierSerializer {
+     }
+ 
+     private static double getDouble(JsonObject obj, String key, double fallback) {
+-        return obj.has(key) ? obj.get(key).getAsDouble() : fallback;
++        double value = obj.has(key) ? obj.get(key).getAsDouble() : fallback;
++        return Double.isFinite(value) ? Math.clamp(value, -30_000_000, 30_000_000) : fallback;
+     }
+ 
+     private static boolean getBoolean(JsonObject obj, String key, boolean fallback) {
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java b/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
+index 327c238..91955f1 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java
+@@ -38,17 +38,18 @@ public class RadialMirrorModifier extends AbstractModifier {
+     @Override
+     public void processBlocks(BlockSet blocks, Player player, BuildPipeline.BuildState action) {
+         if (slices <= 1) return;
++        int effectiveSlices = Math.min(slices, ServerConfig.INSTANCE.getMaxArrayCount(player));
+         int effectiveSize = Math.min(size, ServerConfig.INSTANCE.getMaxMirrorSize(player));
+         List<BlockPos> snapshot = new ArrayList<>(blocks.keySet());
+ 
+-        for (int i = 1; i < slices; i++) {
+-            double angle = (2 * Math.PI * i) / slices;
++        for (int i = 1; i < effectiveSlices; i++) {
++            double angle = (2 * Math.PI * i) / effectiveSlices;
+             addRotated(blocks, snapshot, angle, false, effectiveSize);
+         }
+ 
+         if (mirrorSlices) {
+-            for (int i = 0; i < slices; i++) {
+-                double angle = (2 * Math.PI * i) / slices;
++            for (int i = 0; i < effectiveSlices; i++) {
++                double angle = (2 * Math.PI * i) / effectiveSlices;
+                 addRotated(blocks, snapshot, angle, true, effectiveSize);
+             }
+         }
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
+index d7d3075..8e14987 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
+@@ -118,6 +118,8 @@ public class PacketHandler {
+      * Called on the server when a {@link PlaceBuildModePacket} is received.
+      */
+     public static void handlePlaceBuildMode(PlaceBuildModePacket packet, ServerPlayer player) {
++        if (!Double.isFinite(packet.hitLocation().x) || !Double.isFinite(packet.hitLocation().y)
++                || !Double.isFinite(packet.hitLocation().z)) return;
+         ServerLevel level = player.level();
+ 
+         // Run the full server pipeline: BuildMode → Modifiers → Constraints
+@@ -136,6 +138,8 @@ public class PacketHandler {
+         blockSet.sortByDistance();
+ 
+         ItemStack held = player.getItemInHand(InteractionHand.MAIN_HAND);
++        if (held.getItem() instanceof net.minecraft.world.item.GameMasterBlockItem
++                && !player.canUseGameMasterBlocks()) return;
+         ItemStack offHand = player.getItemInHand(InteractionHand.OFF_HAND);
+         boolean creative = player.isCreative();
+ 
+@@ -171,6 +175,8 @@ public class PacketHandler {
+                 BlockPos pos = mapEntry.getKey();
+                 BlockEntry entry = mapEntry.getValue();
+                 if (!(entry.item instanceof BlockItem blockItem)) continue;
++                if (blockItem instanceof net.minecraft.world.item.GameMasterBlockItem
++                        && !player.canUseGameMasterBlocks()) continue;
+                 if (!creative && used.getOrDefault(entry.item, 0) >= available.getOrDefault(entry.item, 0)) continue;
+                 if (!BuildSettings.canPlaceAt(level, pos, replaceMode, offHand)) continue;
+ 
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
+index ec3b74a..efcf6a9 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.utilities;
+ 
++import nl.requios.effortlessbuilding.backend.BuildBudget;
+ import net.minecraft.core.BlockPos;
+ import nl.requios.effortlessbuilding.Constants;
+ import org.jetbrains.annotations.NotNull;
+@@ -43,7 +44,9 @@ public class BlockSet extends LinkedHashMap<BlockPos, BlockEntry> implements Ite
+     }
+ 
+     public void add(BlockEntry blockEntry) {
++        BuildBudget.visit();
+         if (!containsKey(blockEntry.blockPos)) {
++            BuildBudget.check(size());
+             put(blockEntry.blockPos, blockEntry);
+         } else {
+             if (logging) Constants.LOG.debug("BlockSet already contains block at {}", blockEntry.blockPos);
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
+index 9055ec0..72ae2ca 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockStatus.java
+@@ -25,6 +25,8 @@ public enum BlockStatus {
+     MAX_BLOCKS_EXCEEDED,
+     /** Block is outside the world border or build height. */
+     WORLD_BORDER,
++    /** Server rejected the position (unloaded chunk, game mode or spawn protection). */
++    PROTECTED_POSITION,
+     /** Tile entity is protected by config. */
+     PROTECTED_TILE_ENTITY,
+     /** Survival: player doesn't have enough items. */
+diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
+index a81a164..2d64a8a 100644
+--- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
++++ b/common/src/main/java/nl/requios/effortlessbuilding/utilities/UndoManager.java
+@@ -1,5 +1,6 @@
+ package nl.requios.effortlessbuilding.utilities;
+ 
++import nl.requios.effortlessbuilding.backend.BackendRules;
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.resources.ResourceKey;
+ import net.minecraft.server.level.ServerLevel;
+@@ -65,6 +66,7 @@ public class UndoManager {
+      * consumes items from inventory (positions without enough items are skipped).
+      */
+     public static int undo(ServerPlayer player) {
++        if (!BackendRules.canBuild(player)) return -1;
+         UUID id = player.getUUID();
+         Deque<UndoEntry> undoStack = undoStacks.get(id);
+         if (undoStack == null || undoStack.isEmpty()) return -1;
+@@ -81,6 +83,7 @@ public class UndoManager {
+ 
+         for (var e : entry.changes().entrySet()) {
+             BlockPos pos = e.getKey();
++            if (!BackendRules.canChange(player, level, pos)) continue;
+             BlockChange change = e.getValue();
+             BlockState oldState = change.oldState();
+             BlockState newState = change.newState();
+@@ -134,6 +137,7 @@ public class UndoManager {
+      * In survival, redoing a placement consumes items; redoing a break gives items back.
+      */
+     public static int redo(ServerPlayer player) {
++        if (!BackendRules.canBuild(player)) return -1;
+         UUID id = player.getUUID();
+         Deque<UndoEntry> redoStack = redoStacks.get(id);
+         if (redoStack == null || redoStack.isEmpty()) return -1;
+@@ -150,6 +154,7 @@ public class UndoManager {
+ 
+         for (var e : entry.changes().entrySet()) {
+             BlockPos pos = e.getKey();
++            if (!BackendRules.canChange(player, level, pos)) continue;
+             BlockChange change = e.getValue();
+             BlockState oldState = change.oldState();
+             BlockState newState = change.newState();
