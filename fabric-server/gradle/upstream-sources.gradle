@@ -33,6 +33,8 @@ tasks.register('prepareSharedServerSources', Sync) {
     // Do not package upstream UI, rendering, input hooks or the client controller.
     exclude '**/screen/**', '**/render/**', '**/buildpipeline/BuildPipelineClient.java'
     exclude '**/item/**', '**/menu/**', '**/buildpipeline/RandomizerSystem.java'
+    // The backend owns installation-wide config storage; upstream remains world-scoped.
+    exclude '**/config/ServerConfigStorage.java'
     exclude '**/utilities/KeyBindings.java'
     exclude '**/mixin/MixinMinecraft.java', '**/mixin/MixinGameRenderer.java'
     exclude '**/mixin/KeyMappingAccessor.java', '**/mixin/GuiGraphicsAccessor.java'

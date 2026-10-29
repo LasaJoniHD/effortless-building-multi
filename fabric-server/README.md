@@ -27,9 +27,19 @@ classes and pipeline stage. The upstream client stays untouched and may still
 show its local randomizer creative entry; that entry is unavailable on this
 server. Existing saved stacks of the removed item are not preserved.
 
-World configuration and per-player modifiers retain their existing files under
-`<world>/effortlessbuilding/`. Only operators can update world configuration.
-Undo/redo and placed-block tracking remain session-scoped, as before.
+Server settings are stored in `config/effortlessbuilding/server_config.json`,
+using Fabric Loader's config directory. The file is created automatically on
+startup. If it does not exist yet, settings are imported from the active world's
+`<world>/effortlessbuilding/server_config.json`; the original stays as a backup.
+An existing file in `config/` always takes precedence. These settings now apply
+to the server installation rather than an individual world.
+
+Only operators can update settings through the original client's Server Config
+screen. Saves apply immediately and synchronize to connected companion clients.
+For manual file edits, stop the server, edit the config, and restart; `/reload`
+does not reload these settings. Per-player modifiers and welcome/hint state
+remain in `<world>/effortlessbuilding/`. Undo/redo and placed-block tracking
+remain session-scoped, as before.
 
 ## Connection and content isolation
 
@@ -81,8 +91,9 @@ Server-specific changes to shared code are represented by
 `fabric-server/patches/common-server.patch`. The build copies source inputs into
 `fabric-server/build/generated/upstream-java/` and applies that patch only there.
 It never writes to the original source tree. A normalized SHA-256 manifest covers
-the 23 adapted classes. An upstream change in one of those classes stops the
-server build with the changed filename and an instruction to review its patch.
+the 23 patched classes and the upstream storage class replaced by the backend.
+An upstream change in one of those classes stops the server build with the
+changed filename and an instruction to review its adaptation.
 The patch applier also checks every context line; there is no fuzzy application.
 
 After merging upstream:

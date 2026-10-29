@@ -25,7 +25,21 @@ earlier migration and recipe-sync checks that still supported that item.
 * The server JAR contains no randomizer classes, editor, recipe, custom registry
   mapping, Polymer JARs, or randomizer recipe-sync mixins.
 * `git diff --exit-code -- common fabric` passes. Shared adaptations exist only
-  in server-owned generation rules and the checked patch, covering 23 classes.
+  in server-owned generation rules and the checked patch. The compatibility
+  guard covers 23 patched classes and the replaced configuration storage class.
+
+Configuration location:
+
+* `:fabric-server:configStorageProbe` runs as part of `check` and verifies fresh
+  default creation, migration from a world file, precedence of an existing
+  standard config, save/reload persistence, and preservation of the legacy file.
+* The backend owns `ServerConfigStorage` and uses Fabric Loader's config directory:
+  `config/effortlessbuilding/server_config.json`. Upstream storage is excluded
+  only from server source generation; its source fingerprint is still checked.
+* Dedicated startup imported the fixture's legacy config verbatim. A companion
+  operator packet then saved changed reach settings only to the standard config;
+  the original world file stayed unchanged. All three headless clients remained
+  compatible. Configuration migration/save logs are in `build/config-location/`.
 
 | Test area | Verified behavior |
 | --- | --- |

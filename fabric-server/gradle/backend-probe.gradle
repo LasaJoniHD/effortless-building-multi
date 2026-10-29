@@ -13,6 +13,13 @@ tasks.register('backendProbe', JavaExec) {
     args providers.gradleProperty('probeMode').getOrElse('vanilla')
 }
 
+tasks.register('configStorageProbe', JavaExec) {
+    classpath = sourceSets.backendProbe.runtimeClasspath
+    mainClass = 'nl.requios.effortlessbuilding.config.ConfigStorageProbe'
+    workingDir = layout.buildDirectory.dir('config-storage-test').get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+
 tasks.register('prepareBackendTestServer') {
     def testDirectory = layout.buildDirectory.dir('backend-test/server')
     doLast {
@@ -48,4 +55,4 @@ broadcast-rcon-to-ops=false
 tasks.matching { it.name == 'runBackendTestServer' }.configureEach {
     dependsOn tasks.named('prepareBackendTestServer')
 }
-tasks.named('check') { dependsOn tasks.named('compileBackendProbeJava') }
+tasks.named('check') { dependsOn tasks.named('compileBackendProbeJava'), tasks.named('configStorageProbe') }

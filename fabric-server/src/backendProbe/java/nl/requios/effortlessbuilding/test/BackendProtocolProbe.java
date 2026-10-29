@@ -277,8 +277,18 @@ public final class BackendProtocolProbe {
             place(BuildModeEnum.LINE, new BlockPos(1, -59, 5), new BlockPos(3, -59, 5), null); pause();
             expect(rcon, "execute if block 1 -59 5 stone if block 2 -59 5 stone if block 3 -59 5 air run say EB_SURVIVAL_INVENTORY_LIMIT", "EB_SURVIVAL_INVENTORY_LIMIT");
             rcon.command("op BackendModded");
-            custom("effortlessbuilding:update_server_config", buf -> buf.writeUtf("{\"creativeReach\":150}"));
+            Path legacyConfig = Path.of("..", "server", "backend-test", "effortlessbuilding", "server_config.json");
+            String legacyBefore = Files.exists(legacyConfig) ? Files.readString(legacyConfig) : null;
+            custom("effortlessbuilding:update_server_config", buf -> buf.writeUtf("{\"creativeReach\":173}"));
             pause();
+            Path standardConfig = Path.of("..", "server", "config", "effortlessbuilding", "server_config.json");
+            if (nl.requios.effortlessbuilding.config.ServerConfig.fromJson(Files.readString(standardConfig)).creativeReach != 173) {
+                throw new AssertionError("Operator configuration was not saved in the standard config directory");
+            }
+            if (legacyBefore == null ? Files.exists(legacyConfig) : !Files.readString(legacyConfig).equals(legacyBefore)) {
+                throw new AssertionError("Operator configuration changed the legacy world file");
+            }
+            System.out.println("ASSERT PASS EB_STANDARD_CONFIG_SAVE");
             // Vanilla remains connected while the config is broadcast to modded sessions.
             expect(rcon, "execute if entity BackendVanilla run say EB_CONFIG_BROADCAST_SAFE", "EB_CONFIG_BROADCAST_SAFE");
             rcon.command("deop BackendModded");
