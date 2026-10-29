@@ -53,17 +53,14 @@ public final class BackendProtocolProbe {
     private final boolean mapped;
     private final boolean fabricOnly;
     private boolean configurationAdvertised;
-    private volatile boolean receivedRegistryMapping;
     private volatile int recipeSyncs;
-    private volatile boolean toolRecipe;
+    private volatile int recipeUpdates;
     private final RegistryDataCollector collector = new RegistryDataCollector();
     private final Set<String> payloads = ConcurrentHashMap.newKeySet();
     private volatile Throwable failure;
     private volatile boolean joined;
     private volatile boolean finished;
     private volatile int packets;
-    private volatile boolean receivedTool;
-    private volatile int randomizerMenu;
     private volatile int vanillaChest;
     private volatile boolean chestToolHidden;
     private boolean chestRequested;
@@ -179,10 +176,6 @@ public final class BackendProtocolProbe {
         String name = modded ? "BackendModded" : fabricOnly ? "BackendFabric" : "BackendVanilla";
         connection.send(new ServerboundHelloPacket(name, UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8))));
         await(() -> joined, 30_000, "join");
-        if (modded || fabricOnly) {
-            await(() -> recipeSyncs > 0, 10_000, "Fabric full recipe sync");
-            if (!mapped && toolRecipe) throw new AssertionError("Tool recipe leaked before companion opt-in");
-        }
         if (modded) {
             if (!mapped) try (ProbeRcon rcon = new ProbeRcon()) {
                 rcon.command("gamemode creative BackendModded");
@@ -197,13 +190,11 @@ public final class BackendProtocolProbe {
                     + "effortlessbuilding:sync_ae2_count").getBytes(StandardCharsets.UTF_8)));
             await(() -> payloads.contains("effortlessbuilding:sync_server_config")
                     && payloads.contains("effortlessbuilding:sync_modifiers"), 10_000, "backend synchronization");
-            await(() -> toolRecipe, 10_000, "companion full randomizer recipe (including late opt-in)");
-            if (mapped && !receivedRegistryMapping) throw new AssertionError("No upstream registry map; channels=" + payloads);
             gameplay();
-            int beforeReload = recipeSyncs;
+            int beforeReload = recipeUpdates;
             try (ProbeRcon rcon = new ProbeRcon()) { rcon.command("reload"); }
-            await(() -> recipeSyncs > beforeReload && toolRecipe, 15_000, "full recipe sync after reload");
-            if (mapped && !receivedRegistryMapping) throw new AssertionError("Unchanged client did not receive Fabric registry remapping");
+            await(() -> recipeUpdates > beforeReload, 15_000, "vanilla recipe update after reload");
+            try (ProbeRcon rcon = new ProbeRcon()) { assertRandomizerAbsent(rcon); }
         }
         long until = System.currentTimeMillis() + Long.getLong("probe.duration", modded ? 5000L : 30_000L);
         while (System.currentTimeMillis() < until) {
@@ -253,28 +244,13 @@ public final class BackendProtocolProbe {
             pause();
             expect(rcon, "execute if block 1 -59 3 air run say EB_SPECTATOR_DENIED", "EB_SPECTATOR_DENIED");
             rcon.command("gamemode creative BackendModded");
-            rcon.command("item replace entity BackendModded weapon.mainhand with effortlessbuilding:randomizer_tool[minecraft:custom_data={RandomizerBlocks:['minecraft:stone'],RandomizerRatios:[I;1,0,0,0,0,0,0,0,0]}]");
-            await(() -> receivedTool, 5000, "real randomizer item");
-            connection.send(new ServerboundPlayerInputPacket(new net.minecraft.world.entity.player.Input(false, false, false, false, false, true, false)));
-            connection.send(new ServerboundUseItemPacket(net.minecraft.world.InteractionHand.MAIN_HAND, 1, 0, 0));
-            await(() -> randomizerMenu > 0, 5000, "randomizer editor");
-            connection.send(new ServerboundContainerButtonClickPacket(randomizerMenu, 0));
-            pause();
-            expect(rcon, "execute if items entity BackendModded weapon.mainhand effortlessbuilding:randomizer_tool[minecraft:custom_data~{RandomizerRatios:[I;2,0,0,0,0,0,0,0,0]}] run say EB_MENU_SAVED", "EB_MENU_SAVED");
-            connection.send(new ServerboundContainerClosePacket(randomizerMenu));
-            connection.send(new ServerboundPlayerInputPacket(net.minecraft.world.entity.player.Input.EMPTY));
-            place(BuildModeEnum.SINGLE, new BlockPos(1, -59, 4), new BlockPos(1, -59, 4), null); pause();
-            expect(rcon, "execute if block 1 -59 4 stone run say EB_RANDOMIZER_OK", "EB_RANDOMIZER_OK");
-            // The observer decodes equipment, item entities and nested chest contents with vanilla registries.
-            rcon.command("summon item 3.5 -60 0.5 {Item:{id:'effortlessbuilding:randomizer_tool',count:1},PickupDelay:0}");
-            rcon.command("setblock 4 -60 1 chest{Items:[{Slot:0b,id:'effortlessbuilding:randomizer_tool',count:1},{Slot:1b,id:'minecraft:stone',count:1}]}");
+            assertRandomizerAbsent(rcon);
+            rcon.command("setblock 4 -60 1 chest{Items:[{Slot:1b,id:'minecraft:stone',count:1}]}");
             Files.writeString(Path.of("vanilla-chest-go"), "go");
             await(() -> Files.exists(Path.of("vanilla-chest-done")), 5000, "vanilla chest interaction");
             rcon.command("recipe give BackendVanilla *");
             rcon.command("recipe give BackendModded *");
             pause();
-            expect(rcon, "execute unless items entity BackendVanilla inventory.* effortlessbuilding:randomizer_tool unless items entity BackendVanilla hotbar.* effortlessbuilding:randomizer_tool run say EB_VANILLA_NO_TOOL", "EB_VANILLA_NO_TOOL");
-            expect(rcon, "execute if items block 4 -60 1 container.0 effortlessbuilding:randomizer_tool run say EB_CHEST_TOOL_UNTOUCHED", "EB_CHEST_TOOL_UNTOUCHED");
             expect(rcon, "execute if items entity BackendVanilla hotbar.* minecraft:stone run say EB_VANILLA_NORMAL_INVENTORY", "EB_VANILLA_NORMAL_INVENTORY");
 
             rcon.command("setblock 2 -60 1 crafting_table");
@@ -286,12 +262,10 @@ public final class BackendProtocolProbe {
             useCraftingTable();
             await(() -> craftingMenu > 0, 5000, "modded crafting table");
             fillCraftingGrid();
-            await(() -> craftingContents != null && !craftingContents.getFirst().isEmpty(), 5000, "modded recipe result");
-            connection.send(new ServerboundContainerClickPacket(craftingMenu, 0, (short) 0, (byte) 0,
-                    net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
-                    it.unimi.dsi.fastutil.ints.Int2ObjectMaps.emptyMap(), HashedStack.EMPTY));
+            await(() -> filledRandomizerGrid(craftingContents), 5000, "modded crafting grid contents");
             pause();
-            expect(rcon, "execute if items entity BackendModded hotbar.* effortlessbuilding:randomizer_tool run say EB_MODDED_CRAFTING", "EB_MODDED_CRAFTING");
+            if (!craftingContents.getFirst().isEmpty()) throw new AssertionError("Removed randomizer recipe is craftable by companion");
+            System.out.println("ASSERT PASS EB_MODDED_RANDOMIZER_CRAFTING_DENIED");
             connection.send(new ServerboundContainerClosePacket(craftingMenu));
             await(() -> Files.exists(Path.of("vanilla-craft-done")), 5000, "vanilla recipe rejection");
             if (!Files.readString(Path.of("vanilla-craft-done")).equals("pass")) throw new AssertionError("Vanilla tool crafting was not rejected");
@@ -308,7 +282,7 @@ public final class BackendProtocolProbe {
             // Vanilla remains connected while the config is broadcast to modded sessions.
             expect(rcon, "execute if entity BackendVanilla run say EB_CONFIG_BROADCAST_SAFE", "EB_CONFIG_BROADCAST_SAFE");
             rcon.command("deop BackendModded");
-            System.out.println("GAMEPLAY PASS building, modifiers, undo/redo, permissions, survival, randomizer editor, crafting, vanilla isolation");
+            System.out.println("GAMEPLAY PASS building, modifiers, undo/redo, permissions, survival, randomizer absence, crafting, vanilla isolation");
         }
     }
 
@@ -341,15 +315,29 @@ public final class BackendProtocolProbe {
             fillCraftingGrid();
             Thread.sleep(500);
             List<net.minecraft.world.item.ItemStack> contents = craftingContents;
-            boolean filled = contents != null && contents.size() > 9
-                    && contents.get(2).is(net.minecraft.world.item.Items.IRON_INGOT)
-                    && contents.get(4).is(net.minecraft.world.item.Items.IRON_INGOT)
-                    && contents.get(6).is(net.minecraft.world.item.Items.IRON_INGOT)
-                    && contents.get(5).is(net.minecraft.world.item.Items.POPPY)
-                    && contents.get(8).is(net.minecraft.world.item.Items.REDSTONE);
+            boolean filled = filledRandomizerGrid(contents);
             Files.writeString(Path.of("vanilla-craft-done"), filled && contents.getFirst().isEmpty() ? "pass" : "fail");
             connection.send(new ServerboundContainerClosePacket(craftingMenu));
         }
+    }
+
+    private static boolean filledRandomizerGrid(List<net.minecraft.world.item.ItemStack> contents) {
+        return contents != null && contents.size() > 9
+                && contents.get(2).is(net.minecraft.world.item.Items.IRON_INGOT)
+                && contents.get(4).is(net.minecraft.world.item.Items.IRON_INGOT)
+                && contents.get(6).is(net.minecraft.world.item.Items.IRON_INGOT)
+                && contents.get(5).is(net.minecraft.world.item.Items.POPPY)
+                && contents.get(8).is(net.minecraft.world.item.Items.REDSTONE);
+    }
+
+    private static void assertRandomizerAbsent(ProbeRcon rcon) throws Exception {
+        for (String player : List.of("BackendModded", "BackendVanilla")) {
+            String item = rcon.command("give " + player + " effortlessbuilding:randomizer_tool");
+            if (!item.toLowerCase(Locale.ROOT).contains("unknown item")) throw new AssertionError("Randomizer still registered: " + item);
+            String recipe = rcon.command("recipe give " + player + " effortlessbuilding:randomizer_tool");
+            if (!recipe.toLowerCase(Locale.ROOT).contains("unknown recipe")) throw new AssertionError("Randomizer recipe still exists: " + recipe);
+        }
+        System.out.println("ASSERT PASS EB_RANDOMIZER_ITEM_AND_RECIPE_ABSENT");
     }
 
     private static void prepareCrafting(ProbeRcon rcon, String player) throws Exception {
@@ -474,15 +462,13 @@ public final class BackendProtocolProbe {
                     buf.writeIdentifier(Identifier.parse("minecraft:crafting_shaped"));
                 });
             }
-        } else if (packet instanceof ClientboundContainerSetSlotPacket slot) {
-            if (BuiltInRegistries.ITEM.getKey(slot.getItem().getItem()).toString().equals("effortlessbuilding:randomizer_tool")) receivedTool = true;
+        } else if (packet instanceof ClientboundUpdateRecipesPacket) {
+            recipeUpdates++;
         } else if (packet instanceof ClientboundOpenScreenPacket screen) {
             String type = BuiltInRegistries.MENU.getKey(screen.getType()).toString();
             System.out.println("OPEN " + (modded ? "modded " : "vanilla ") + type);
-            if (type.equals("effortlessbuilding:randomizer")) {
-                if (!modded) throw new AssertionError("Vanilla received custom menu");
-                randomizerMenu = screen.getContainerId();
-            } else if (!modded && screen.getType() == MenuType.GENERIC_9x3) vanillaChest = screen.getContainerId();
+            if (type.startsWith("effortlessbuilding:")) throw new AssertionError("Server opened removed custom menu");
+            if (!modded && screen.getType() == MenuType.GENERIC_9x3) vanillaChest = screen.getContainerId();
             else if (screen.getType() == MenuType.CRAFTING) craftingMenu = screen.getContainerId();
         } else if (packet instanceof ClientboundContainerSetContentPacket contents) {
             if (craftingMenu > 0 && contents.containerId() == craftingMenu) craftingContents = contents.items();
@@ -565,12 +551,14 @@ public final class BackendProtocolProbe {
                                 });
                             } else if (id.equals("fabric:registry/sync")) {
                                 var mapping = net.fabricmc.fabric.impl.registry.sync.packet.RegistrySyncPayload.CODEC.decode(input);
-                                if (!modded) throw new AssertionError("Non-companion Fabric client received custom registries");
+                                if (mapping.registryMap().values().stream().anyMatch(entries -> entries.keySet().stream()
+                                        .anyMatch(key -> key.getNamespace().equals("effortlessbuilding")))) {
+                                    throw new AssertionError("Server still registers Effortless Building content");
+                                }
                                 for (var entry : mapping.registryMap().entrySet()) {
                                     Registry<?> registry = BuiltInRegistries.REGISTRY.getValue(entry.getKey());
                                     if (registry != null) remap(registry, entry.getValue());
                                 }
-                                receivedRegistryMapping = true;
                                 customConfiguration("fabric:registry/sync/complete", out -> {});
                             }
                         }
@@ -605,19 +593,8 @@ public final class BackendProtocolProbe {
                                 .map(recipe -> recipe.id().identifier().toString()).toList();
                         if (!ids.contains("minecraft:crafting_table")) throw new AssertionError("Vanilla recipes missing from Fabric sync");
                         boolean hasTool = ids.contains("effortlessbuilding:randomizer_tool");
-                        if (!modded && hasTool) throw new AssertionError("Non-companion Fabric client received tool recipe");
-                        recipes.entries().stream().flatMap(entry -> entry.recipes().stream())
-                                .filter(recipe -> recipe.id().identifier().toString().equals("effortlessbuilding:randomizer_tool"))
-                                .forEach(recipe -> {
-                                    var result = recipe.value().display().getFirst().result();
-                                    if (!(result instanceof net.minecraft.world.item.crafting.display.SlotDisplay.ItemStackSlotDisplay stack)
-                                            || !BuiltInRegistries.ITEM.getKey(stack.stack().item().value()).toString()
-                                                    .equals("effortlessbuilding:randomizer_tool")) {
-                                        throw new AssertionError("Randomizer recipe result has an incorrect remapped item ID");
-                                    }
-                                });
+                        if (hasTool) throw new AssertionError("Removed randomizer recipe leaked into Fabric sync");
                         if (input.isReadable()) throw new AssertionError("Unread data in Fabric recipe payload");
-                        toolRecipe = hasTool;
                         recipeSyncs++;
                         System.out.println("ASSERT PASS full recipe sync: companion=" + modded + ", tool=" + hasTool + ", recipes=" + ids.size());
                         return new ClientboundCustomPayloadPacket(new DiscardedPayload(ClientboundRecipeSyncPayload.TYPE.id()));

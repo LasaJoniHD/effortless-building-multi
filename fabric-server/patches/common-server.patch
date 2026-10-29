@@ -263,7 +263,6 @@ index bc5059e..b682003 100644
  
      @Override
 diff --git a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
-index 9ae43a0..b81eb86 100644
 --- a/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
 +++ b/common/src/main/java/nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java
 @@ -1,5 +1,7 @@
@@ -274,7 +273,31 @@ index 9ae43a0..b81eb86 100644
  import net.minecraft.core.BlockPos;
  import net.minecraft.core.component.DataComponents;
  import net.minecraft.world.entity.player.Player;
-@@ -141,6 +143,14 @@ public class BuildPipeline {
+@@ -14,7 +16,6 @@
+ import nl.requios.effortlessbuilding.buildmode.BuildModeEnum;
+ import nl.requios.effortlessbuilding.buildmode.ModeOptions;
+ import nl.requios.effortlessbuilding.mixin.BucketItemAccessor;
+-import nl.requios.effortlessbuilding.item.RandomizerToolItem;
+ import nl.requios.effortlessbuilding.utilities.BlockEntry;
+ import nl.requios.effortlessbuilding.utilities.BlockSet;
+ import org.jetbrains.annotations.Nullable;
+@@ -56,7 +57,6 @@
+         BuildPipeline pipeline = new BuildPipeline();
+         pipeline.addSystem(BuildModeSystem.INSTANCE);
+         pipeline.addSystem(ModifierSystemServer.INSTANCE);
+-        pipeline.addSystem(RandomizerSystem.INSTANCE);
+         pipeline.addSystem(ConstraintSystem.INSTANCE);
+         return pipeline;
+     }
+@@ -68,7 +68,6 @@
+      * setPlacedBy logic which the mod's batch placement cannot replicate correctly.
+      */
+     public static boolean isBuildTriggerItem(ItemStack stack) {
+-        if (stack.getItem() instanceof RandomizerToolItem) return true;
+         if (stack.getItem() instanceof BlockItem blockItem) {
+             BlockState defaultState = blockItem.getBlock().defaultBlockState();
+             for (var property : defaultState.getProperties()) {
+@@ -141,6 +140,14 @@
                                                  ModeOptions.ActionEnum fill, ModeOptions.ActionEnum cubeFill,
                                                  ModeOptions.ActionEnum raisedEdge, ModeOptions.ActionEnum circleStart,
                                                  boolean protectTileEntities) {
@@ -289,7 +312,7 @@ index 9ae43a0..b81eb86 100644
          BuildModeSystem.setContext(new BuildModeSystem.Context(
                  mode, firstPos, secondPos, thirdPos, fill, cubeFill, raisedEdge, circleStart));
          ConstraintSystem.setPlacementContext(new ConstraintSystem.PlacementContext(protectTileEntities));
-@@ -149,7 +159,11 @@ public class BuildPipeline {
+@@ -149,7 +156,11 @@
              processBlocks(blockSet, player, action);
              if (blockSet.isEmpty()) return null;
              return blockSet;
@@ -357,29 +380,6 @@ index 7a887a3..ea33e59 100644
          // Client-side: read from ClientConfig
          try {
              return nl.requios.effortlessbuilding.config.ClientConfig.INSTANCE.shouldProtectTileEntities();
-diff --git a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
-index 1bfac94..a305a37 100644
---- a/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
-+++ b/common/src/main/java/nl/requios/effortlessbuilding/menu/RandomizerMenu.java
-@@ -69,6 +69,9 @@ public class RandomizerMenu extends AbstractContainerMenu {
- 
-     @Override
-     public void clicked(int slotId, int button, ContainerInput clickType, Player player) {
-+        // The editor may not move the stack whose configuration it is editing.
-+        int toolSlot = player.getInventory().getSelectedSlot();
-+        if (slotId == PLAYER_MAIN_END + toolSlot || clickType == ContainerInput.SWAP && button == toolSlot) return;
-         if (slotId >= 0 && slotId < GHOST_SLOT_END) {
-             ItemStack source = clickType == ContainerInput.SWAP && button >= 0 && button < 9
-                     ? player.getInventory().getItem(button)
-@@ -172,7 +175,7 @@ public class RandomizerMenu extends AbstractContainerMenu {
- 
-     @Override
-     public boolean stillValid(Player player) {
--        return player.isAlive();
-+        return player.isAlive() && player.getMainHandItem() == tool;
-     }
- 
-     private static final class GhostSlot extends Slot {
 diff --git a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java b/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
 index ad9d3e1..5bd675d 100644
 --- a/common/src/main/java/nl/requios/effortlessbuilding/mixin/MixinBlockItem.java
@@ -458,36 +458,93 @@ index 327c238..91955f1 100644
              }
          }
 diff --git a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
-index d7d3075..8e14987 100644
 --- a/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
 +++ b/common/src/main/java/nl/requios/effortlessbuilding/network/PacketHandler.java
-@@ -118,6 +118,8 @@ public class PacketHandler {
-      * Called on the server when a {@link PlaceBuildModePacket} is received.
-      */
+@@ -41,2 +41 @@
+ import nl.requios.effortlessbuilding.utilities.UndoManager;
+-import nl.requios.effortlessbuilding.item.RandomizerToolItem;
+@@ -44,3 +43,2 @@
+ import java.util.LinkedHashMap;
+-import java.util.HashMap;
+ import java.util.List;
+@@ -120,2 +118,4 @@
      public static void handlePlaceBuildMode(PlaceBuildModePacket packet, ServerPlayer player) {
 +        if (!Double.isFinite(packet.hitLocation().x) || !Double.isFinite(packet.hitLocation().y)
 +                || !Double.isFinite(packet.hitLocation().z)) return;
          ServerLevel level = player.level();
- 
-         // Run the full server pipeline: BuildMode → Modifiers → Constraints
-@@ -136,6 +138,8 @@ public class PacketHandler {
-         blockSet.sortByDistance();
- 
+@@ -138,2 +138,4 @@
          ItemStack held = player.getItemInHand(InteractionHand.MAIN_HAND);
 +        if (held.getItem() instanceof net.minecraft.world.item.GameMasterBlockItem
 +                && !player.canUseGameMasterBlocks()) return;
          ItemStack offHand = player.getItemInHand(InteractionHand.OFF_HAND);
-         boolean creative = player.isCreative();
- 
-@@ -171,6 +175,8 @@ public class PacketHandler {
-                 BlockPos pos = mapEntry.getKey();
-                 BlockEntry entry = mapEntry.getValue();
-                 if (!(entry.item instanceof BlockItem blockItem)) continue;
-+                if (blockItem instanceof net.minecraft.world.item.GameMasterBlockItem
-+                        && !player.canUseGameMasterBlocks()) continue;
-                 if (!creative && used.getOrDefault(entry.item, 0) >= available.getOrDefault(entry.item, 0)) continue;
-                 if (!BuildSettings.canPlaceAt(level, pos, replaceMode, offHand)) continue;
- 
+@@ -146,66 +148,3 @@
+         int placed = 0;
+-        if (held.getItem() instanceof RandomizerToolItem) {
+-            Map<Item, Integer> required = new LinkedHashMap<>();
+-            for (var mapEntry : blockSet.validEntries()) {
+-                if (!BuildSettings.canPlaceAt(level, mapEntry.getKey(), replaceMode, offHand)) continue;
+-                Item item = mapEntry.getValue().item;
+-                if (item instanceof BlockItem) required.merge(item, 1, Integer::sum);
+-            }
+-
+-            Map<Item, Integer> available = new HashMap<>();
+-            for (var requirement : required.entrySet()) {
+-                if (creative) {
+-                    available.put(requirement.getKey(), Integer.MAX_VALUE);
+-                } else {
+-                    int inventoryCount = InventoryHelper.findTotalItemsInInventory(player, requirement.getKey());
+-                    int networkNeeded = Math.max(0, requirement.getValue() - inventoryCount);
+-                    int fromNetwork = InventoryHelper.supplementFromNetwork(
+-                            player, requirement.getKey(), networkNeeded);
+-                    available.put(requirement.getKey(), inventoryCount + fromNetwork);
+-                }
+-            }
+-
+-            Map<Item, Integer> used = new HashMap<>();
+-            double yFrac = packet.hitLocation().y - Math.floor(packet.hitLocation().y);
+-            for (var mapEntry : blockSet.validEntries()) {
+-                BlockPos pos = mapEntry.getKey();
+-                BlockEntry entry = mapEntry.getValue();
+-                if (!(entry.item instanceof BlockItem blockItem)) continue;
+-                if (!creative && used.getOrDefault(entry.item, 0) >= available.getOrDefault(entry.item, 0)) continue;
+-                if (!BuildSettings.canPlaceAt(level, pos, replaceMode, offHand)) continue;
+-
+-                BlockState oldState = level.getBlockState(pos);
+-                if (!creative && !oldState.canBeReplaced()) {
+-                    ItemStack toolForDrops = ServerConfig.INSTANCE.survivalRequireTools
+-                            ? InventoryHelper.findCorrectTool(player, oldState)
+-                            : player.getMainHandItem();
+-                    var drops = Block.getDrops(oldState, level, pos, level.getBlockEntity(pos), player, toolForDrops);
+-                    for (ItemStack drop : drops) {
+-                        InventoryHelper.giveOrDropItems(player, drop.getItem(), drop.getCount());
+-                    }
+-                    if (ServerConfig.INSTANCE.survivalUseDurability) {
+-                        InventoryHelper.damageCorrectTool(player, oldState);
+-                    }
+-                }
+-
+-                ItemStack placementStack = new ItemStack(entry.item);
+-                Vec3 localHit = new Vec3(packet.hitLocation().x, pos.getY() + yFrac, packet.hitLocation().z);
+-                BlockHitResult serverHit = new BlockHitResult(localHit, packet.hitFace(), pos, false);
+-                BlockPlaceContext ctx = new OpenBlockPlaceContext(
+-                        level, player, InteractionHand.MAIN_HAND, placementStack, serverHit);
+-                BlockState state = blockItem.getBlock().getStateForPlacement(ctx);
+-                if (state == null) state = blockItem.getBlock().defaultBlockState();
+-                state = entry.applyTransforms(state);
+-                level.setBlock(pos, state, 3);
+-                undoChanges.put(pos.immutable(), new UndoManager.BlockChange(oldState, state));
+-                used.merge(entry.item, 1, Integer::sum);
+-                placed++;
+-            }
+-
+-            if (!creative) {
+-                for (var usage : used.entrySet()) {
+-                    InventoryHelper.consumeItems(player, usage.getKey(), usage.getValue());
+-                }
+-            }
+-        } else if (held.getItem() instanceof BlockItem blockItem) {
++        if (held.getItem() instanceof BlockItem blockItem) {
+             Item heldItem = held.getItem();
 diff --git a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java b/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java
 index ec3b74a..efcf6a9 100644
 --- a/common/src/main/java/nl/requios/effortlessbuilding/utilities/BlockSet.java

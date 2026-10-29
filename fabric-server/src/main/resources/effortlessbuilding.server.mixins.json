@@ -5,17 +5,7 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [
     "BucketItemAccessor",
-    "MixinBlockItem",
-    "OptionalContentMixin",
-    "OptionalContentSlotMixin",
-    "OptionalContainerMixin",
-    "OptionalCraftingMixin",
-    "OptionalRecipeMixin",
-    "OptionalRecipeSyncMixin",
-    "FabricRecipeSyncInvoker",
-    "ServerConnectionAccessor",
-    "ClientRegistrySyncMixin",
-    "ConfigurationTaskQueueAccessor"
+    "MixinBlockItem"
   ],
   "injectors": {
     "defaultRequire": 1

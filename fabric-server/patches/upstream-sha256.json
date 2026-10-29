@@ -15,7 +15,6 @@
   "nl/requios/effortlessbuilding/buildpipeline/BuildModeSystem.java": "b23eb3eb8d17dbfa7abaef57d4d66a9603bca8c64f4eb8d187c4fc88d4e268d3",
   "nl/requios/effortlessbuilding/buildpipeline/BuildPipeline.java": "d627c5f17ef98f9b545ed501ba2733c6608a643d652e82d6f94a24d887a7128d",
   "nl/requios/effortlessbuilding/buildpipeline/ConstraintSystem.java": "efff8fddd2d19dcc6126db942349398d108434586d905cdf8db4567548329a96",
-  "nl/requios/effortlessbuilding/menu/RandomizerMenu.java": "019483a3a4e0266dc6974542881c02882f4f1477c6e60991bbf8d6cf3a155503",
   "nl/requios/effortlessbuilding/mixin/MixinBlockItem.java": "206fa06455ca1261419a522e750ad09baff96979ab29967a591666f2ac88d7d5",
   "nl/requios/effortlessbuilding/modifier/ModifierSerializer.java": "b4b773e403ff2de29cea0ac9bf8f8051a4d95fda6c59664868cb3571408d1459",
   "nl/requios/effortlessbuilding/modifier/RadialMirrorModifier.java": "949dd15f85093c8f65799d5bb78cf727be9a42aa9d7ea2f792c590de47569ce9",

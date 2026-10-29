@@ -5,9 +5,6 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ClientboundPlayChannelEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.fabricmc.fabric.api.recipe.v1.sync.RecipeSynchronization;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
 import nl.requios.effortlessbuilding.network.*;
@@ -19,11 +16,6 @@ public final class FabricBackend {
     private FabricBackend() {}
 
     public static void initialize() {
-        nl.requios.effortlessbuilding.server.DeferredRegistrySync.initialize();
-        // Offer shaped recipes (including the randomizer) to recipe viewers that request
-        // Fabric's optional full sync. Vanilla clients never request or receive this payload.
-        RecipeSynchronization.synchronizeRecipeSerializer(BuiltInRegistries.RECIPE_SERIALIZER.getValue(
-                Identifier.parse("minecraft:crafting_shaped")));
         PayloadTypeRegistry.serverboundPlay().register(PlaceBuildModePacket.TYPE, PlaceBuildModePacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(BreakBuildModePacket.TYPE, BreakBuildModePacket.STREAM_CODEC);
         PayloadTypeRegistry.serverboundPlay().register(UndoPacket.TYPE, UndoPacket.STREAM_CODEC);
@@ -63,7 +55,7 @@ public final class FabricBackend {
         }
     }
 
-    /** Also available during initial data sync, before the JOIN event enables gameplay. */
+    /** Recognizes the unchanged companion's existing synchronization channels. */
     public static boolean hasClientChannels(ServerPlayer player) {
         return ServerPlayNetworking.canSend(player, SyncModifiersS2CPacket.TYPE)
                 && ServerPlayNetworking.canSend(player, SyncServerConfigS2CPacket.TYPE)

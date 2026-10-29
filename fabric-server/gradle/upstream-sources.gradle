@@ -32,6 +32,7 @@ tasks.register('prepareSharedServerSources', Sync) {
     into(generatedJava)
     // Do not package upstream UI, rendering, input hooks or the client controller.
     exclude '**/screen/**', '**/render/**', '**/buildpipeline/BuildPipelineClient.java'
+    exclude '**/item/**', '**/menu/**', '**/buildpipeline/RandomizerSystem.java'
     exclude '**/utilities/KeyBindings.java'
     exclude '**/mixin/MixinMinecraft.java', '**/mixin/MixinGameRenderer.java'
     exclude '**/mixin/KeyMappingAccessor.java', '**/mixin/GuiGraphicsAccessor.java'

@@ -4,7 +4,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import nl.requios.effortlessbuilding.config.*;
 import nl.requios.effortlessbuilding.modifier.ModifierServerStorage;
-import nl.requios.effortlessbuilding.mixin.FabricRecipeSyncInvoker;
 import nl.requios.effortlessbuilding.network.*;
 import nl.requios.effortlessbuilding.utilities.PlacedBlockTracker;
 import nl.requios.effortlessbuilding.utilities.UndoManager;
@@ -26,10 +25,6 @@ public final class BackendLifecycle {
                 ModifierServerStorage.serializePlayer(player.getUUID())));
         PacketHandler.sendToClient(player, new SyncServerConfigS2CPacket(ServerConfig.INSTANCE.toJson()));
         WelcomeMessageStorage.showIfNeeded(player);
-        // Initial inventory/equipment packets may have been sent before opt-in.
-        player.inventoryMenu.sendAllDataToRemote();
-        player.getRecipeBook().sendInitialRecipeBook(player);
-        FabricRecipeSyncInvoker.effortlessbuilding$sendRecipes(player, true);
     }
 
     public static void disconnected(ServerPlayer player) {
